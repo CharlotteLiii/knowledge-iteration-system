@@ -215,8 +215,11 @@ def _post_chat(cfg: LLMConfig, messages: List[Dict[str, str]]) -> str:
         "model": cfg.model,
         "messages": messages,
         "temperature": cfg.temperature,
-        "response_format": {"type": "json_object"},
     }
+    # 部分 OpenAI 兼容供应商拒绝 response_format=json_object（如火山方舟 Ark plan endpoint 的 ark-code-latest）。
+    # 环境变量 KIS_LLM_DISABLE_JSON_MODE=1 时关闭；prompt 已明确要求 JSON，_extract_json 也能兼容纯文本。
+    if os.environ.get("KIS_LLM_DISABLE_JSON_MODE", "").strip().lower() not in ("1", "true", "yes"):
+        payload["response_format"] = {"type": "json_object"}
     data = json.dumps(payload).encode("utf-8")
 
     req = urllib.request.Request(
@@ -591,7 +594,7 @@ def _call_batch(purpose: str, items: List[Dict[str, str]], cfg: Optional[LLMConf
     for batch in _split_batches([{"name": m["name"], "content": m["content"]} for m in misses]):
         blocks = _format_batch_blocks(batch)
         user_prompt = user_template.format(count=len(batch), blocks=blocks)
-        # 小休息避免触发 429（智谱默认频率限制很严）
+        # 小休息避免触发 429（部分供应商频率限制严）
         time.sleep(1.5)
         txt = _post_chat_with_retry(
             cfg,
