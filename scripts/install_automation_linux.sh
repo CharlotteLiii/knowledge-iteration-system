@@ -127,7 +127,13 @@ build_cron_lines() {
     [ -z "$KEY" ] && continue
     local logfile="$VAULT/scripts/logs/${KEY}.log"
     local errfile="$VAULT/scripts/logs/${KEY}.error.log"
-    local cmd="cd '$VAULT' && '$PYTHON_BIN' '$VAULT/scripts/$SCRIPT' $ARGS >> '$logfile' 2>> '$errfile'"
+    # cron 不加载用户 shell rc（.bashrc/.zshrc），分离部署时需显式带上 KIS_VAULT_ROOT。
+    # 仅当已设置时注入；默认部署（scripts 在 Vault 根下）保持原行为。
+    local env_prefix=""
+    if [ -n "${KIS_VAULT_ROOT:-}" ]; then
+      env_prefix="KIS_VAULT_ROOT='$KIS_VAULT_ROOT' "
+    fi
+    local cmd="cd '$VAULT' && ${env_prefix}'$PYTHON_BIN' '$VAULT/scripts/$SCRIPT' $ARGS >> '$logfile' 2>> '$errfile'"
     case "$SCHED" in
       daily)
         echo "# $KEY (daily)"

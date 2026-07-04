@@ -181,7 +181,11 @@ if ($DryRun) {
     $t = $Tasks[0]
     $argsList = @("`"$($ScriptDir)\$($t.script)`"") + $t.args
     Write-Host "任务名称: $TaskPrefix$($t.key)"
-    Write-Host "执行程序: $PythonCmd"
+    if ($env:KIS_VAULT_ROOT) {
+        Write-Host "执行程序: cmd.exe /c (set KIS_VAULT_ROOT=$($env:KIS_VAULT_ROOT) && $PythonCmd ...)"
+    } else {
+        Write-Host "执行程序: $PythonCmd"
+    }
     Write-Host "参数:      $($argsList -join ' ')"
     Write-Host "工作目录: $VaultDir"
     Write-Host "调度:      $($t.schedule) $($t.hour):$($t.minute)"
@@ -201,10 +205,21 @@ foreach ($t in $Tasks) {
     $taskName = "$TaskPrefix$($t.key)"
     $scriptPath = Join-Path $ScriptDir $t.script
     $argsList = @("`"$scriptPath`"") + ($t.args | ForEach-Object { $_ })
-    $Action = New-ScheduledTaskAction `
-        -Execute $PythonCmd `
-        -Argument ($argsList -join ' ') `
-        -WorkingDirectory $VaultDir
+    # Task Scheduler 不继承安装时的 shell 环境变量。分离部署（用 KIS_VAULT_ROOT 指定 Vault）
+    # 时，通过 cmd.exe /c 先 set 再调 python；默认部署（scripts 在 Vault 根下、未设变量）保持原行为。
+    $VaultRootEnv = $env:KIS_VAULT_ROOT
+    if ($VaultRootEnv) {
+        $innerCmd = "set `"KIS_VAULT_ROOT=$VaultRootEnv`" && `"$PythonCmd`" " + ($argsList -join ' ')
+        $Action = New-ScheduledTaskAction `
+            -Execute "cmd.exe" `
+            -Argument "/c `"$innerCmd`"" `
+            -WorkingDirectory $VaultDir
+    } else {
+        $Action = New-ScheduledTaskAction `
+            -Execute $PythonCmd `
+            -Argument ($argsList -join ' ') `
+            -WorkingDirectory $VaultDir
+    }
 
     $Triggers = Build-Trigger $t
 
