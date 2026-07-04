@@ -4,7 +4,7 @@
 
 > A **four-layer knowledge distillation system** inspired by Karpathy's take on personal knowledge bases — turning you from an "info-hoarding bookmark addict" into someone who actually distills reusable methods.
 
-![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg) ![Platform: macOS | Linux | Windows](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg) ![Platform: macOS | Linux | Windows](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
 ## 🧠 What it does
 
@@ -28,7 +28,7 @@ It runs an automated pipeline over the four kinds of content scattered across yo
 
 ### Requirements
 
-- Python 3.9+
+- Python 3.10+
 - A markdown-based knowledge base (Obsidian recommended, but any folder of `.md` files works)
 - (Optional) Any OpenAI-compatible LLM API key
 

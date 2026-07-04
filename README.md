@@ -4,7 +4,7 @@
 
 > 基于 Karpathy 知识库理念打造的**四层知识蒸馏系统** —— 帮你从"信息焦虑收藏党"变成"能沉淀方法论的产出者"。
 
-![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg) ![Platform: macOS | Linux | Windows](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg) ![Platform: macOS | Linux | Windows](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
 ## 🧠 它做什么
 
@@ -28,7 +28,7 @@
 
 ### 前置要求
 
-- Python 3.9+
+- Python 3.10+
 - 一个 markdown 知识库（推荐 Obsidian，但任何 `.md` 目录都行）
 - （可选）任意 OpenAI 兼容的 LLM API key
 
