@@ -1,5 +1,7 @@
 # 📚 Knowledge Iteration System
 
+> 🇨🇳 中文版：[README.md](./README.md)
+
 > A **four-layer knowledge distillation system** inspired by Karpathy's take on personal knowledge bases — turning you from an "info-hoarding bookmark addict" into someone who actually distills reusable methods.
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg) ![Platform: macOS | Linux | Windows](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)

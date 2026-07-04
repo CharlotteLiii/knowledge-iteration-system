@@ -1,5 +1,7 @@
 # 📚 Knowledge Iteration System
 
+> 🇬🇧 English version: [README.en.md](./README.en.md)
+
 > 基于 Karpathy 知识库理念打造的**四层知识蒸馏系统** —— 帮你从"信息焦虑收藏党"变成"能沉淀方法论的产出者"。
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg) ![Platform: macOS | Linux | Windows](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
