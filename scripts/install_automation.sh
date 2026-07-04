@@ -249,6 +249,17 @@ generate_plist() {
       ;;
   esac
 
+  # 注入 KIS_VAULT_ROOT，确保 launchd（不读 .zshrc）能定位分离部署的 Vault。
+  # 仅当环境变量已设置时注入；默认部署（scripts 在 Vault 根下）留空，保持原行为。
+  local env_block=""
+  if [ -n "${KIS_VAULT_ROOT:-}" ]; then
+    env_block="    <key>EnvironmentVariables</key>
+    <dict>
+        <key>KIS_VAULT_ROOT</key>
+        <string>${KIS_VAULT_ROOT}</string>
+    </dict>"
+  fi
+
   cat >"$out" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -261,6 +272,7 @@ generate_plist() {
     </array>
     <key>WorkingDirectory</key>
     <string>$VAULT</string>
+$env_block
 $sched_block
     <key>StandardOutPath</key>
     <string>$stdout_log</string>
