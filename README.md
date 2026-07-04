@@ -77,33 +77,82 @@ python3 scripts/run_all.py
 [9/9] quarterly_audit    季度资产审计
 ```
 
-## 📅 定时自动化（可选）
+## 📅 定时自动化（可选，v0.2+ per-task 调度）
 
-### macOS
+从 v0.2 开始，自动化不再只处理“每日蒸馏”，而是为 **8 个任务**分别注册独立调度。默认时间：
+
+| 任务 | 默认触发时间 |
+|------|-------------|
+| 每日知识蒸馏 `daily_distill` | 每天 21:00 |
+| 想法成熟度追踪 `idea_tracker` | 每天 21:05 |
+| Clippings 提炼 `clipping_refiner` | 每天 21:10 |
+| Skill 候选检测 `skill_detector` | 每天 21:15 |
+| 结构性链接建议 `link_suggester` | 每天 21:20 |
+| 输出反馈回流 `feedback_loop` | 每天 21:25 |
+| 每周知识复盘 `weekly_review` | 每周日 14:00 |
+| 季度知识健康审计 `quarterly_audit` | 季度最后一天 12:00 |
+
+日常每日任务错开 5 分钟，避免 LLM API 扎堆、日志也更容易看。
+
+### 交互式安装（首次推荐）
 
 ```bash
-bash scripts/install_automation.sh                # 每天 10:00 自动跑
-bash scripts/install_automation.sh --interval 3   # 每 3 天跑一次
-bash scripts/install_automation.sh --dry-run      # 预演
-bash scripts/install_automation.sh --uninstall    # 卸载
+python3 scripts/setup_preflight.py --ask-tasks
 ```
 
-### Linux
+会弹一个类似下面的选单：
+
+```
+【自动化任务清单】
+| 任务 | 触发时间 | 启用 |
+|------|----------|------|
+| 每日知识蒸馏 | 每天 21:00 | ✅ |
+...
+选项：
+  Y  按上表默认时间全部安装（推荐）
+  e  逐项编辑（可禁用/改时间）
+  n  不安装任何自动化任务
+```
+
+选完后跑对应平台的安装器，把配置处理成真实的系统定时任务：
 
 ```bash
+# macOS
+bash scripts/install_automation.sh              # 预览：--dry-run；卸载：--uninstall
+
+# Linux
 bash scripts/install_automation_linux.sh
+
+# Windows (PowerShell)
+.\scripts\install_automation.ps1                # 预览：-DryRun；卸载：-Uninstall
 ```
 
-### Windows（PowerShell）
+### 还可以直接用 CLI 标志改任务（不交互）
 
-```powershell
-.\scripts\install_automation.ps1
-.\scripts\install_automation.ps1 -Interval 3
-.\scripts\install_automation.ps1 -DryRun
-.\scripts\install_automation.ps1 -Uninstall
+```bash
+# 把每日蒸馏改到 22:30 触发
+python3 scripts/setup_preflight.py --set-task daily_distill=22:30
+
+# 禁用反馈回流 & Skill 检测
+python3 scripts/setup_preflight.py --disable-task feedback_loop --disable-task skill_detector
+
+# 把每周复盘改到周一 15:00
+python3 scripts/setup_preflight.py --set-task-dow weekly_review=1 --set-task weekly_review=15:00
+
+# 看当前所有任务的时间
+python3 scripts/setup_preflight.py --list-tasks
 ```
 
-自动化间隔调整：修改 `.knowledge-iteration-system.json` 里的 `automation.dailyIntervalDays`，然后重跑安装脚本。
+改完后重跑一次 `install_automation.*`，新时间就会生效（安装器会先 bootout 旧任务、再重建）。
+
+### 日志位置
+
+- macOS / Linux：`scripts/logs/<task_key>.log` + `<task_key>.error.log`
+- Windows：同上。
+
+### 旧 v0.1 接口（向后兼容）
+
+`--set-daily-interval 1/2/3/4` 仍可用且会写入 `dailyIntervalDays` 字段，但新 installer 优先读取 `automation.tasks`。建议新安装均改用 per-task 接口。
 
 ## 🗂 目录结构
 

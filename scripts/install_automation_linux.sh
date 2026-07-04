@@ -1,41 +1,38 @@
 #!/bin/bash
-# Linux 定时任务安装脚本（cron）
-# 从 .knowledge-iteration-system.json 的 automation 配置读取：
-#   - dailyIntervalDays: 1/2/3/4 或 空/0 表示不安装
-#   - dailyRunAtHour: 每天在几点跑
-#   - dailyScanDays: 每次扫描最近多少天
+# Linux 定时任务安装脚本（cron · per-task v0.2+）
+#
+# 从 .knowledge-iteration-system.json 的 automation.tasks 表读取每个任务的
+# schedule / hour / minute / dayOfWeek，在 crontab 中生成一段带 BEGIN/END
+# 标记的块。
+#
+# 支持的 schedule 值：
+#   - daily              → 'M H * * *'
+#   - weekly             → 'M H * * dayOfWeek' (0=Sun..6=Sat)
+#   - quarterly-last-day → 拆成两行：'M H 31 3,12 *' + 'M H 30 6,9 *'
+#
 # 用法：
 #   bash scripts/install_automation_linux.sh --dry-run
 #   bash scripts/install_automation_linux.sh
-#   bash scripts/install_automation_linux.sh --interval 3
 #   bash scripts/install_automation_linux.sh --uninstall
 set -euo pipefail
 
 DRY_RUN=0
 UNINSTALL=0
-OVERRIDE_INTERVAL=""
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
     --uninstall) UNINSTALL=1 ;;
-    --interval)
-      shift || true; OVERRIDE_INTERVAL="${1:-}" ;;
-    --interval=*)
-      OVERRIDE_INTERVAL="${arg#*=}" ;;
     *) echo "未知参数: $arg"; exit 2 ;;
   esac
 done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VAULT="$(cd "$SCRIPT_DIR/.." && pwd)"
-RUNNER="$SCRIPT_DIR/run_all.py"
 BEGIN_MARK="# BEGIN knowledge-iteration-system"
 END_MARK="# END knowledge-iteration-system"
 
+# ---------- Python 探测 ----------
 PYTHON_BIN=""
-# cron 环境的 PATH 很小，`python3` 可能指向旧版本。
-# run_all.py 需 3.10+（PEP 604 联合类型），仅 3.9 下缓解靠 __future__ 不够：
-# 其他子脚本也用了 3.10+ 语法。所以探测并写绝对路径。
 pick_python() {
   local candidate="$1"
   [ -z "$candidate" ] && return 1
@@ -66,11 +63,10 @@ if [ -z "$PYTHON_BIN" ]; then
   exit 1
 fi
 
-echo "🔬 知识蒸馏自动化安装脚本（Linux cron）"
-echo "================================"
+echo "🔬 知识蒸馏自动化安装脚本（Linux cron · per-task v0.2+）"
+echo "======================================================"
 echo "Vault:  $VAULT"
 echo "Python: $PYTHON_BIN"
-echo "Runner: $RUNNER"
 echo ""
 
 if [ "$UNINSTALL" -eq 1 ]; then
@@ -83,56 +79,93 @@ if [ "$UNINSTALL" -eq 1 ]; then
   exit 0
 fi
 
-# 读取 automation 配置
-SETTINGS="$(cd "$VAULT" && "$PYTHON_BIN" - <<PY
-import sys
+# ---------- 读取任务表 ----------
+# 每行输出：key <TAB> schedule <TAB> hour <TAB> minute <TAB> dow <TAB> script <TAB> args_shellquoted
+TASKS_TSV="$(cd "$VAULT" && "$PYTHON_BIN" - <<'PY'
+import shlex, sys
 from pathlib import Path
 sys.path.insert(0, str(Path("scripts").resolve()))
-from kis_config import automation_interval_days, automation_scan_days, automation_run_hour
-interval = automation_interval_days()
-override = "${OVERRIDE_INTERVAL}"
-if override:
-    if override.lower() in {"none", "off", "manual", "0"}:
-        interval = None
-    else:
-        try:
-            interval = int(override)
-        except ValueError:
-            print("ERR interval-invalid")
-            sys.exit(3)
-print(interval if interval is not None else "NONE", automation_scan_days(), automation_run_hour())
+from kis_config import ordered_task_items, validate_task
+errs = []
+rows = []
+for key, task in ordered_task_items():
+    if not task.get("enabled", True):
+        continue
+    verr = validate_task(key, task)
+    if verr:
+        errs.extend(verr)
+        continue
+    schedule = task.get("schedule")
+    hour = int(task.get("hour", 9))
+    minute = int(task.get("minute", 0))
+    dow = int(task.get("dayOfWeek", -1)) if task.get("dayOfWeek") is not None else -1
+    script = str(task.get("script", ""))
+    args = task.get("args") or []
+    if not isinstance(args, list):
+        args = []
+    args_str = " ".join(shlex.quote(str(a)) for a in args)
+    rows.append("\t".join([key, schedule, str(hour), str(minute), str(dow), script, args_str]))
+if errs:
+    for e in errs:
+        print(e, file=sys.stderr)
+    sys.exit(3)
+print("\n".join(rows))
 PY
 )"
 
-INTERVAL="$(echo "$SETTINGS" | awk '{print $1}')"
-SCAN_DAYS="$(echo "$SETTINGS" | awk '{print $2}')"
-RUN_HOUR="$(echo "$SETTINGS" | awk '{print $3}')"
-
-if [ "$INTERVAL" = "NONE" ]; then
-  echo "⚠️ 当前配置为“不开启自动化”。"
-  echo "   先运行：python3 scripts/setup_preflight.py --set-daily-interval N (N 为 1/2/3/4)"
-  echo "   或临时安装：bash scripts/install_automation_linux.sh --interval N"
+if [ -z "${TASKS_TSV// /}" ]; then
+  echo "⚠️ 没有启用的自动化任务。"
+  echo "   先跑：python3 scripts/setup_preflight.py --ask-tasks"
   exit 0
 fi
 
-# cron 语法：
-# - 每天:            0 H * * *
-# - 每 N 天 (N>1): 0 H */N * *   (注意 */N 不严格等于“每 N 天”，但在多数环境下够用)
-if [ "$INTERVAL" = "1" ]; then
-  CRON_EXPR="0 ${RUN_HOUR} * * *"
-else
-  CRON_EXPR="0 ${RUN_HOUR} */${INTERVAL} * *"
-fi
+mkdir -p "$VAULT/scripts/logs"
 
-CRON_LINE="${CRON_EXPR} cd '$VAULT' && '$PYTHON_BIN' '$RUNNER' --only daily --days ${SCAN_DAYS} >> '$VAULT/scripts/distill.log' 2>> '$VAULT/scripts/distill.error.log'"
+build_cron_lines() {
+  # 打印全部 cron 行到 stdout（不含 BEGIN/END 标记）
+  echo "$TASKS_TSV" | while IFS=$'\t' read -r KEY SCHED HH MM DOW SCRIPT ARGS; do
+    [ -z "$KEY" ] && continue
+    local logfile="$VAULT/scripts/logs/${KEY}.log"
+    local errfile="$VAULT/scripts/logs/${KEY}.error.log"
+    local cmd="cd '$VAULT' && '$PYTHON_BIN' '$VAULT/scripts/$SCRIPT' $ARGS >> '$logfile' 2>> '$errfile'"
+    case "$SCHED" in
+      daily)
+        echo "# $KEY (daily)"
+        echo "$MM $HH * * *  $cmd"
+        ;;
+      weekly)
+        echo "# $KEY (weekly, dow=$DOW)"
+        echo "$MM $HH * * $DOW  $cmd"
+        ;;
+      quarterly-last-day)
+        echo "# $KEY (quarterly last day; 3/31, 6/30, 9/30, 12/31)"
+        echo "$MM $HH 31 3,12 *  $cmd"
+        echo "$MM $HH 30 6,9 *  $cmd"
+        ;;
+      *)
+        echo "# WARN: unsupported schedule $SCHED for $KEY, skipped"
+        ;;
+    esac
+  done
+}
 
-echo "配置：每 ${INTERVAL} 天在 ${RUN_HOUR}:00 自动运行，扫描最近 ${SCAN_DAYS} 天。"
+echo "=== 计划安装的任务 ==="
+echo "$TASKS_TSV" | while IFS=$'\t' read -r KEY SCHED HH MM DOW SCRIPT ARGS; do
+  [ -z "$KEY" ] && continue
+  case "$SCHED" in
+    daily) desc="每天 $(printf '%02d:%02d' "$HH" "$MM")";;
+    weekly) desc="每周 (dow=$DOW) $(printf '%02d:%02d' "$HH" "$MM")";;
+    quarterly-last-day) desc="季度最后一天 $(printf '%02d:%02d' "$HH" "$MM")";;
+    *) desc="$SCHED $HH:$MM";;
+  esac
+  echo "  - $KEY   $desc   → $SCRIPT $ARGS"
+done
 echo ""
 
 if [ "$DRY_RUN" -eq 1 ]; then
-  echo "=== [Dry Run] 预览 ==="
+  echo "=== [Dry Run] 预览 crontab 块 ==="
   echo "$BEGIN_MARK"
-  echo "$CRON_LINE"
+  build_cron_lines
   echo "$END_MARK"
   echo ""
   echo "实际安装请去掉 --dry-run。"
@@ -140,10 +173,18 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 TMP_FILE="$(mktemp)"
-(crontab -l 2>/dev/null | sed "/$BEGIN_MARK/,/$END_MARK/d"; echo "$BEGIN_MARK"; echo "$CRON_LINE"; echo "$END_MARK") > "$TMP_FILE"
+{
+  crontab -l 2>/dev/null | sed "/$BEGIN_MARK/,/$END_MARK/d"
+  echo "$BEGIN_MARK"
+  build_cron_lines
+  echo "$END_MARK"
+} > "$TMP_FILE"
 crontab "$TMP_FILE"
 rm -f "$TMP_FILE"
 
-echo "✅ cron 定时任务已安装。"
-echo "运行频率：${CRON_EXPR}"
-echo "卸载命令：bash scripts/install_automation_linux.sh --uninstall"
+echo "✅ cron 任务已安装。"
+echo ""
+echo "常用命令："
+echo "  查看：crontab -l | sed -n '/${BEGIN_MARK}/,/${END_MARK}/p'"
+echo "  查日志：ls \"$VAULT/scripts/logs/\""
+echo "  卸载：bash scripts/install_automation_linux.sh --uninstall"

@@ -1,51 +1,52 @@
 #!/bin/bash
-# 知识蒸馏自动化安装脚本（macOS LaunchAgents）
-# 读取 .knowledge-iteration-system.json 的 automation 配置动态生成 plist：
-#   - dailyIntervalDays: 1/2/3/4（0 / 空 表示不安装自动化）
-#   - dailyRunAtHour: 每天/每 N 天在几点跑
-#   - dailyScanDays: 每次扫描最近多少天
+# 知识蒸馏自动化安装脚本（macOS LaunchAgents，v0.2+ per-task 版本）
+#
+# 从 .knowledge-iteration-system.json 的 automation.tasks 表读取每个任务的
+# schedule / hour / minute / dayOfWeek，为每个启用的任务生成一个独立的
+# LaunchAgent（com.knowledge-iteration.<task_key>.plist）。
+#
+# 支持的 schedule 值：
+#   - daily              → StartCalendarInterval Hour+Minute
+#   - weekly             → StartCalendarInterval Weekday+Hour+Minute (0=Sun..6=Sat)
+#   - quarterly-last-day → StartCalendarInterval array 覆盖 3/31 6/30 9/30 12/31 的 Hour+Minute
+#
 # 用法：
 #   bash scripts/install_automation.sh --dry-run
 #   bash scripts/install_automation.sh
-#   bash scripts/install_automation.sh --interval 3
 #   bash scripts/install_automation.sh --uninstall
+#
+# 迁移：会在安装时自动 bootout 老命名 (com.karpathy.knowledge.distiller,
+# com.knowledge-iteration.distiller) 的旧 LaunchAgent，防止新旧同时运行。
 set -euo pipefail
 
 DRY_RUN=0
 UNINSTALL=0
-OVERRIDE_INTERVAL=""
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
     --uninstall) UNINSTALL=1 ;;
-    --interval)
-      shift || true; OVERRIDE_INTERVAL="${1:-}" ;;
-    --interval=*)
-      OVERRIDE_INTERVAL="${arg#*=}" ;;
     *) echo "未知参数: $arg"; exit 2 ;;
   esac
 done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VAULT="$(cd "$SCRIPT_DIR/.." && pwd)"
-PLIST_NAME="com.knowledge-iteration.distiller.plist"
-PLIST_SRC="$SCRIPT_DIR/$PLIST_NAME"
-PLIST_DST="$HOME/Library/LaunchAgents/$PLIST_NAME"
-LABEL="com.knowledge-iteration.distiller"
+UID_NUM="$(id -u)"
+LA_DIR="$HOME/Library/LaunchAgents"
+LABEL_PREFIX="com.knowledge-iteration"
 
-# 兼容老命名（Phase 2 前）：如果检测到旧 LaunchAgent，install 时自动迁移，uninstall 时一并清除。
-LEGACY_LABEL="com.karpathy.knowledge.distiller"
-LEGACY_PLIST_DST="$HOME/Library/LaunchAgents/${LEGACY_LABEL}.plist"
+# 老命名（需要在新安装时清理）
+LEGACY_LABELS=(
+  "com.karpathy.knowledge.distiller"
+  "com.knowledge-iteration.distiller"   # v0.1 的单任务命名
+)
 
+# ---------- Python 探测（沿用 v0.1.1 修复逻辑）----------
 PYTHON_BIN=""
-# 优先挑 3.10+（run_all.py 用了 PEP 604 `list[str] | None` 联合类型语法）。
-# LaunchAgent 环境 PATH 不含 Homebrew / Framework，`/usr/bin/env python3` 会退回系统
-# /usr/bin/python3（macOS 自带 3.9），触发 TypeError。所以这里必须写绝对路径。
 pick_python() {
   local candidate="$1"
   [ -z "$candidate" ] && return 1
   "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1 || return 1
-  # 解析出真实绝对路径（避免 shim / symlink 在 launchd 里失效）
   local resolved
   resolved="$("$candidate" -c 'import sys; print(sys.executable)' 2>/dev/null || true)"
   [ -z "$resolved" ] && resolved="$candidate"
@@ -76,172 +77,258 @@ if [ -z "$PYTHON_BIN" ]; then
   exit 1
 fi
 
-echo "🔬 知识蒸馏自动化安装脚本（macOS）"
-echo "================================"
+echo "🔬 知识蒸馏自动化安装脚本（macOS · per-task v0.2+）"
+echo "======================================================"
 echo "Vault:   $VAULT"
 echo "Python:  $PYTHON_BIN"
-echo "Plist:   $PLIST_DST"
+echo "Plist目录: $LA_DIR"
 echo ""
 
-if [ "$UNINSTALL" -eq 1 ]; then
-  echo "将卸载 LaunchAgent: $LABEL"
-  if [ -f "$LEGACY_PLIST_DST" ]; then
-    echo "同时会清理旧命名版本：$LEGACY_LABEL"
-  fi
-  if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[Dry Run] launchctl bootout gui/$(id -u) $PLIST_DST"
-    echo "[Dry Run] rm -f $PLIST_DST"
-    if [ -f "$LEGACY_PLIST_DST" ]; then
-      echo "[Dry Run] launchctl bootout gui/$(id -u) $LEGACY_PLIST_DST"
-      echo "[Dry Run] rm -f $LEGACY_PLIST_DST"
+# ---------- 清理老命名的 LaunchAgent ----------
+cleanup_legacy() {
+  for legacy in "${LEGACY_LABELS[@]}"; do
+    local plist="$LA_DIR/${legacy}.plist"
+    if [ -f "$plist" ]; then
+      if [ "$DRY_RUN" -eq 1 ]; then
+        echo "[Dry Run] 将清理老 LaunchAgent: $legacy"
+      else
+        launchctl bootout "gui/${UID_NUM}" "$plist" >/dev/null 2>&1 || true
+        rm -f "$plist"
+        echo "🔄 已清理老 LaunchAgent: $legacy"
+      fi
     fi
-    exit 0
-  fi
-  launchctl bootout "gui/$(id -u)" "$PLIST_DST" >/dev/null 2>&1 || true
-  rm -f "$PLIST_DST"
-  if [ -f "$LEGACY_PLIST_DST" ]; then
-    launchctl bootout "gui/$(id -u)" "$LEGACY_PLIST_DST" >/dev/null 2>&1 || true
-    rm -f "$LEGACY_PLIST_DST"
-  fi
-  echo "✅ 已卸载"
-  exit 0
-fi
-
-# 读取 automation 配置
-read_settings() {
-  cd "$VAULT" && "$PYTHON_BIN" - <<PY
-import json, sys
-from pathlib import Path
-sys.path.insert(0, str(Path("scripts").resolve()))
-from kis_config import automation_interval_days, automation_scan_days, automation_run_hour
-interval = automation_interval_days()
-override = "${OVERRIDE_INTERVAL}"
-if override:
-    if override.lower() in {"none", "off", "manual", "0"}:
-        interval = None
-    else:
-        try:
-            interval = int(override)
-        except ValueError:
-            print("ERR", "interval-invalid")
-            sys.exit(3)
-print(interval if interval is not None else "NONE", automation_scan_days(), automation_run_hour())
-PY
+  done
 }
 
-SETTINGS="$(read_settings)"
-INTERVAL="$(echo "$SETTINGS" | awk '{print $1}')"
-SCAN_DAYS="$(echo "$SETTINGS" | awk '{print $2}')"
-RUN_HOUR="$(echo "$SETTINGS" | awk '{print $3}')"
-
-if [ "$INTERVAL" = "NONE" ]; then
-  echo "⚠️ 当前配置为“不开启自动化”。"
-  echo "   先运行：python3 scripts/setup_preflight.py --set-daily-interval N (N 为 1/2/3/4)"
-  echo "   或临时安装：bash scripts/install_automation.sh --interval N"
+# ---------- Uninstall 分支 ----------
+if [ "$UNINSTALL" -eq 1 ]; then
+  echo "将卸载所有 ${LABEL_PREFIX}.* LaunchAgent。"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    for plist in "$LA_DIR"/${LABEL_PREFIX}.*.plist; do
+      [ -e "$plist" ] || continue
+      echo "[Dry Run] launchctl bootout gui/$UID_NUM $plist && rm -f $plist"
+    done
+    cleanup_legacy
+    exit 0
+  fi
+  for plist in "$LA_DIR"/${LABEL_PREFIX}.*.plist; do
+    [ -e "$plist" ] || continue
+    launchctl bootout "gui/$UID_NUM" "$plist" >/dev/null 2>&1 || true
+    rm -f "$plist"
+    echo "✅ 已卸载: $(basename "$plist")"
+  done
+  cleanup_legacy
+  echo "✅ 卸载完成"
   exit 0
 fi
 
-INTERVAL_SECONDS=$(( INTERVAL * 86400 ))
-echo "配置：每 ${INTERVAL} 天在 ${RUN_HOUR}:00 自动运行，扫描最近 ${SCAN_DAYS} 天。"
+# ---------- 读取任务表 ----------
+# 输出格式：每行一个任务，字段用 tab 分隔：
+#   key <TAB> schedule <TAB> hour <TAB> minute <TAB> dayOfWeek <TAB> script <TAB> args_shellquoted
+TASKS_TSV="$(cd "$VAULT" && "$PYTHON_BIN" - <<'PY'
+import shlex, sys
+from pathlib import Path
+sys.path.insert(0, str(Path("scripts").resolve()))
+from kis_config import ordered_task_items, validate_task
+errs = []
+rows = []
+for key, task in ordered_task_items():
+    if not task.get("enabled", True):
+        continue
+    verr = validate_task(key, task)
+    if verr:
+        errs.extend(verr)
+        continue
+    schedule = task.get("schedule")
+    hour = int(task.get("hour", 9))
+    minute = int(task.get("minute", 0))
+    dow = int(task.get("dayOfWeek", -1)) if task.get("dayOfWeek") is not None else -1
+    script = str(task.get("script", ""))
+    args = task.get("args") or []
+    if not isinstance(args, list):
+        args = []
+    args_str = " ".join(shlex.quote(str(a)) for a in args)
+    rows.append("\t".join([key, schedule, str(hour), str(minute), str(dow), script, args_str]))
+if errs:
+    print("ERR", file=sys.stderr)
+    for e in errs:
+        print(e, file=sys.stderr)
+    sys.exit(3)
+print("\n".join(rows))
+PY
+)"
+
+if [ -z "${TASKS_TSV// /}" ]; then
+  echo "⚠️ 没有启用的自动化任务。"
+  echo "   先跑：python3 scripts/setup_preflight.py --ask-tasks"
+  echo "   或者手动 enable: python3 scripts/setup_preflight.py --enable-task daily_distill"
+  cleanup_legacy
+  exit 0
+fi
+
+TASK_COUNT="$(printf '%s\n' "$TASKS_TSV" | grep -c . || true)"
+echo "读取到 ${TASK_COUNT} 个启用的自动化任务。"
 echo ""
 
+# ---------- 生成单个 plist 的模板 ----------
+# 参数：$1 plist_out_path, $2 label, $3 schedule, $4 hour, $5 minute, $6 dayOfWeek, $7 script, $8 args_shellquoted
 generate_plist() {
-  cat >"$1" <<PL
+  local out="$1" label="$2" sched="$3" hh="$4" mm="$5" dow="$6" script="$7" args_str="$8"
+  local script_path="$VAULT/scripts/$script"
+  local stdout_log="$VAULT/scripts/logs/${label}.log"
+  local stderr_log="$VAULT/scripts/logs/${label}.error.log"
+
+  # 构造 ProgramArguments <array>
+  local prog_args=""
+  prog_args+=$'\n'"        <string>$PYTHON_BIN</string>"
+  prog_args+=$'\n'"        <string>$script_path</string>"
+  if [ -n "$args_str" ]; then
+    # args_str 已经 shell-quoted，用 eval 拆回原始 argv
+    # shellcheck disable=SC2086
+    eval "set -- $args_str"
+    for arg in "$@"; do
+      # XML escape 最小集合
+      local esc="${arg//&/&amp;}"
+      esc="${esc//</&lt;}"
+      esc="${esc//>/&gt;}"
+      prog_args+=$'\n'"        <string>$esc</string>"
+    done
+  fi
+
+  # 构造调度块 <key>StartCalendarInterval</key> ...
+  local sched_block=""
+  case "$sched" in
+    daily)
+      sched_block="    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>$hh</integer>
+        <key>Minute</key><integer>$mm</integer>
+    </dict>"
+      ;;
+    weekly)
+      sched_block="    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key><integer>$dow</integer>
+        <key>Hour</key><integer>$hh</integer>
+        <key>Minute</key><integer>$mm</integer>
+    </dict>"
+      ;;
+    quarterly-last-day)
+      # 3/31 6/30 9/30 12/31
+      sched_block="    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Month</key><integer>3</integer>
+            <key>Day</key><integer>31</integer>
+            <key>Hour</key><integer>$hh</integer>
+            <key>Minute</key><integer>$mm</integer>
+        </dict>
+        <dict>
+            <key>Month</key><integer>6</integer>
+            <key>Day</key><integer>30</integer>
+            <key>Hour</key><integer>$hh</integer>
+            <key>Minute</key><integer>$mm</integer>
+        </dict>
+        <dict>
+            <key>Month</key><integer>9</integer>
+            <key>Day</key><integer>30</integer>
+            <key>Hour</key><integer>$hh</integer>
+            <key>Minute</key><integer>$mm</integer>
+        </dict>
+        <dict>
+            <key>Month</key><integer>12</integer>
+            <key>Day</key><integer>31</integer>
+            <key>Hour</key><integer>$hh</integer>
+            <key>Minute</key><integer>$mm</integer>
+        </dict>
+    </array>"
+      ;;
+    *)
+      echo "❌ 未知 schedule: $sched" >&2
+      return 1
+      ;;
+  esac
+
+  cat >"$out" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>${LABEL}</string>
+    <string>$label</string>
     <key>ProgramArguments</key>
-    <array>
-        <string>${PYTHON_BIN}</string>
-        <string>${VAULT}/scripts/run_all.py</string>
-        <string>--only</string>
-        <string>daily</string>
-        <string>--days</string>
-        <string>${SCAN_DAYS}</string>
+    <array>$prog_args
     </array>
     <key>WorkingDirectory</key>
-    <string>${VAULT}</string>
-    <key>StartInterval</key>
-    <integer>${INTERVAL_SECONDS}</integer>
-    <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>${RUN_HOUR}</integer>
-        <key>Minute</key>
-        <integer>0</integer>
-    </dict>
-    <key>RunAtLoad</key>
-    <true/>
+    <string>$VAULT</string>
+$sched_block
     <key>StandardOutPath</key>
-    <string>${VAULT}/scripts/distill.log</string>
+    <string>$stdout_log</string>
     <key>StandardErrorPath</key>
-    <string>${VAULT}/scripts/distill.error.log</string>
+    <string>$stderr_log</string>
 </dict>
 </plist>
 PL
 }
 
+# ---------- 循环生成 & bootstrap ----------
+mkdir -p "$VAULT/scripts/logs"
+
+echo "=== 计划安装的任务 ==="
+printf '%s\n' "$TASKS_TSV" | while IFS=$'\t' read -r KEY SCHED HH MM DOW SCRIPT ARGS; do
+  [ -z "$KEY" ] && continue
+  LABEL="${LABEL_PREFIX}.${KEY}"
+  case "$SCHED" in
+    daily) sched_desc="每天 $(printf '%02d:%02d' "$HH" "$MM")";;
+    weekly) sched_desc="每周 (dow=$DOW) $(printf '%02d:%02d' "$HH" "$MM")";;
+    quarterly-last-day) sched_desc="季度最后一天 $(printf '%02d:%02d' "$HH" "$MM")";;
+    *) sched_desc="$SCHED $HH:$MM";;
+  esac
+  echo "  - $LABEL   $sched_desc   → $SCRIPT $ARGS"
+done
+echo ""
+
 if [ "$DRY_RUN" -eq 1 ]; then
-  echo "=== [Dry Run] 预览 ==="
-  echo "将生成: $PLIST_SRC"
-  echo "复制到: $PLIST_DST"
-  echo "加载:   launchctl bootstrap gui/$(id -u) $PLIST_DST"
-  echo ""
-  echo "----- 预览 plist 内容 -----"
+  echo "=== [Dry Run] 预览首个任务的 plist ==="
+  first_line="$(printf '%s\n' "$TASKS_TSV" | head -n 1)"
+  IFS=$'\t' read -r KEY SCHED HH MM DOW SCRIPT ARGS <<< "$first_line"
   TMP_PLIST="$(mktemp)"
-  generate_plist "$TMP_PLIST"
+  generate_plist "$TMP_PLIST" "${LABEL_PREFIX}.${KEY}" "$SCHED" "$HH" "$MM" "$DOW" "$SCRIPT" "$ARGS"
+  echo "----- ${LABEL_PREFIX}.${KEY}.plist -----"
   cat "$TMP_PLIST"
-  rm -f "$TMP_PLIST"
   echo "----- 预览结束 -----"
+  rm -f "$TMP_PLIST"
   echo ""
   echo "实际安装请去掉 --dry-run。"
   exit 0
 fi
 
-mkdir -p "$HOME/Library/LaunchAgents"
+mkdir -p "$LA_DIR"
+cleanup_legacy
 
-# 迁移：如果旧命名版本存在，先 bootout 并删除旧 plist，避免新旧同时运行。
-if [ -f "$LEGACY_PLIST_DST" ]; then
-  echo "🔄 检测到旧命名 LaunchAgent（$LEGACY_LABEL），将自动迁移到新命名空间。"
-  launchctl bootout "gui/$(id -u)" "$LEGACY_PLIST_DST" >/dev/null 2>&1 || true
-  rm -f "$LEGACY_PLIST_DST"
-  echo "✅ 旧 LaunchAgent 已清理"
-  echo ""
-fi
+# 先卸载所有旧的同前缀 LaunchAgent，避免残留
+for old_plist in "$LA_DIR"/${LABEL_PREFIX}.*.plist; do
+  [ -e "$old_plist" ] || continue
+  launchctl bootout "gui/$UID_NUM" "$old_plist" >/dev/null 2>&1 || true
+  rm -f "$old_plist"
+done
 
-echo "步骤 1/3: 生成并写入 plist..."
-generate_plist "$PLIST_SRC"
-cp "$PLIST_SRC" "$PLIST_DST"
-echo "✅ plist 已就绪"
+INSTALLED=0
+while IFS=$'\t' read -r KEY SCHED HH MM DOW SCRIPT ARGS; do
+  [ -z "$KEY" ] && continue
+  LABEL="${LABEL_PREFIX}.${KEY}"
+  PLIST_DST="$LA_DIR/${LABEL}.plist"
+  generate_plist "$PLIST_DST" "$LABEL" "$SCHED" "$HH" "$MM" "$DOW" "$SCRIPT" "$ARGS"
+  launchctl bootstrap "gui/$UID_NUM" "$PLIST_DST"
+  INSTALLED=$((INSTALLED + 1))
+  echo "✅ 安装并加载: $LABEL"
+done <<< "$TASKS_TSV"
 
 echo ""
-echo "步骤 2/3: 加载定时任务..."
-launchctl bootout "gui/$(id -u)" "$PLIST_DST" >/dev/null 2>&1 || true
-launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"
-echo "✅ 定时任务加载成功"
-
-echo ""
-echo "步骤 3/3: 验证安装状态..."
-launchctl kickstart -k "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
-RESULT=$(launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null | head -5 || true)
-if [ -n "$RESULT" ]; then
-  echo "✅ 自动化任务已成功安装！"
-  echo ""
-  echo "任务信息："
-  echo "$RESULT"
-  echo ""
-  echo "📅 运行频率：每 ${INTERVAL} 天 ${RUN_HOUR}:00"
-  echo "🔎 扫描范围：每次扫描最近 ${SCAN_DAYS} 天"
-  echo "📂 报告位置：第二层：蒸馏层 (Distilled)/每日蒸馏/"
-else
-  echo "⚠️ 未读取到任务状态，请手动检查 launchctl print gui/$(id -u)/$LABEL"
-fi
-
+echo "✅ 完成，共安装 $INSTALLED 个 LaunchAgent。"
 echo ""
 echo "常用命令："
-echo "  立即运行一次：launchctl kickstart -k gui/$(id -u)/$LABEL"
-echo "  查看日志：cat \"$VAULT/scripts/distill.log\""
-echo "  卸载任务：bash scripts/install_automation.sh --uninstall"
+echo "  查看所有任务：launchctl list | grep '${LABEL_PREFIX}\\.'"
+echo "  立即触发某任务：launchctl kickstart -k gui/$UID_NUM/${LABEL_PREFIX}.<task_key>"
+echo "  查看日志：ls \"$VAULT/scripts/logs/\""
+echo "  卸载全部：bash scripts/install_automation.sh --uninstall"
