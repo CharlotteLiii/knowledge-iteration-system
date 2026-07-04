@@ -3,6 +3,8 @@
 
 替代 run_all.sh，支持 macOS / Windows / Linux。
 """
+from __future__ import annotations
+
 import argparse
 import subprocess
 import sys
