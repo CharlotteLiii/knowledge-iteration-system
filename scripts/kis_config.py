@@ -68,10 +68,100 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "runner": "scripts/run_all.py",
     },
     "automation": {
+        # 旧字段，保留兼容 v0.1.x 行为。新安装将依据 `tasks` 字段。
         "dailyIntervalDays": None,
         "dailyScanDays": 2,
         "dailyRunAtHour": 9,
         "askOnFirstUse": True,
+        # v0.2+：多任务调度表。每个任务独立 schedule / 时间。
+        # schedule 支持：
+        #   daily              → hour, minute
+        #   weekly             → dayOfWeek(0=Sun..6=Sat), hour, minute
+        #   quarterly-last-day → hour, minute（在 3/31 6/30 9/30 12/31 触发）
+        # 默认时间与用户声明一致：
+        #   每日知识蒸馏          21:00
+        #   想法成熟度追踪           21:05（错开 5min，避免同时启动 & LLM 扎堆）
+        #   Clippings 提炼 + 卡片   21:10
+        #   Skill 候选检测           21:15
+        #   结构性双链建议         21:20
+        #   输出反馈回流           21:25
+        #   每周知识复盘           周日 14:00
+        #   季度知识健康审计       季度最后一天 12:00
+        "tasks": {
+            "daily_distill": {
+                "label": "每日知识蒸馏",
+                "script": "daily_distill.py",
+                "args": ["--days", "2"],
+                "schedule": "daily",
+                "hour": 21,
+                "minute": 0,
+                "enabled": True,
+            },
+            "idea_tracker": {
+                "label": "想法成熟度追踪",
+                "script": "idea_tracker.py",
+                "args": [],
+                "schedule": "daily",
+                "hour": 21,
+                "minute": 5,
+                "enabled": True,
+            },
+            "clipping_refiner": {
+                "label": "Clippings 提炼 + 卡片",
+                "script": "clipping_refiner.py",
+                "args": [],
+                "schedule": "daily",
+                "hour": 21,
+                "minute": 10,
+                "enabled": True,
+            },
+            "skill_detector": {
+                "label": "Skill 候选检测",
+                "script": "skill_detector.py",
+                "args": ["--llm=auto"],
+                "schedule": "daily",
+                "hour": 21,
+                "minute": 15,
+                "enabled": True,
+            },
+            "link_suggester": {
+                "label": "结构性双链建议",
+                "script": "link_suggester.py",
+                "args": [],
+                "schedule": "daily",
+                "hour": 21,
+                "minute": 20,
+                "enabled": True,
+            },
+            "feedback_loop": {
+                "label": "输出反馈回流",
+                "script": "feedback_loop.py",
+                "args": [],
+                "schedule": "daily",
+                "hour": 21,
+                "minute": 25,
+                "enabled": True,
+            },
+            "weekly_review": {
+                "label": "每周知识复盘",
+                "script": "weekly_review.py",
+                "args": [],
+                "schedule": "weekly",
+                "dayOfWeek": 0,  # Sunday
+                "hour": 14,
+                "minute": 0,
+                "enabled": True,
+            },
+            "quarterly_audit": {
+                "label": "季度知识健康审计",
+                "script": "quarterly_audit.py",
+                "args": [],
+                "schedule": "quarterly-last-day",
+                "hour": 12,
+                "minute": 0,
+                "enabled": True,
+            },
+        },
     },
 }
 
@@ -354,6 +444,148 @@ def save_automation_settings(
     on_disk["automation"] = auto
     CONFIG_PATH.write_text(json.dumps(on_disk, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     # Refresh in-memory config so subsequent calls in this process see the update.
+    globals()["CONFIG"] = load_config()
+    return CONFIG_PATH
+
+
+# ---------------------------------------------------------------------------
+# v0.2+: per-task automation table helpers
+# ---------------------------------------------------------------------------
+
+VALID_SCHEDULES: Tuple[str, ...] = ("daily", "weekly", "quarterly-last-day")
+
+# Task key order is the recommended run order (used by installers when preserving
+# task order for logs / summaries). Do not sort alphabetically.
+TASK_ORDER: Tuple[str, ...] = (
+    "daily_distill",
+    "idea_tracker",
+    "clipping_refiner",
+    "skill_detector",
+    "link_suggester",
+    "feedback_loop",
+    "weekly_review",
+    "quarterly_audit",
+)
+
+
+def _default_tasks() -> Dict[str, Dict[str, Any]]:
+    return json.loads(json.dumps(DEFAULT_CONFIG["automation"]["tasks"]))  # deep copy
+
+
+def automation_tasks() -> Dict[str, Dict[str, Any]]:
+    """Return the merged per-task automation table.
+
+    Merges user overrides in `.knowledge-iteration-system.json` over the defaults
+    from `DEFAULT_CONFIG`. Unknown task keys from user config are preserved (so
+    users can add custom tasks); unknown fields on known tasks are also preserved.
+    """
+    defaults = _default_tasks()
+    user_tasks = automation_config().get("tasks")
+    if not isinstance(user_tasks, dict):
+        return defaults
+    merged = dict(defaults)
+    for key, override in user_tasks.items():
+        if not isinstance(override, dict):
+            continue
+        base = dict(merged.get(key, {}))
+        base.update(override)
+        merged[key] = base
+    return merged
+
+
+def ordered_task_items() -> List[Tuple[str, Dict[str, Any]]]:
+    """Return tasks in canonical order; unknown user tasks appended at the end."""
+    tasks = automation_tasks()
+    seen = set()
+    result: List[Tuple[str, Dict[str, Any]]] = []
+    for key in TASK_ORDER:
+        if key in tasks:
+            result.append((key, tasks[key]))
+            seen.add(key)
+    for key, cfg in tasks.items():
+        if key not in seen:
+            result.append((key, cfg))
+    return result
+
+
+def validate_task(key: str, task: Dict[str, Any]) -> List[str]:
+    """Return a list of validation error messages for a task config. Empty = valid."""
+    errors: List[str] = []
+    schedule = task.get("schedule")
+    if schedule not in VALID_SCHEDULES:
+        errors.append(f"[{key}] schedule '{schedule}' 无效，需为 {VALID_SCHEDULES}")
+    hour = task.get("hour", 9)
+    minute = task.get("minute", 0)
+    try:
+        if not (0 <= int(hour) <= 23):
+            errors.append(f"[{key}] hour {hour} 越界 (0-23)")
+    except (TypeError, ValueError):
+        errors.append(f"[{key}] hour {hour!r} 不是整数")
+    try:
+        if not (0 <= int(minute) <= 59):
+            errors.append(f"[{key}] minute {minute} 越界 (0-59)")
+    except (TypeError, ValueError):
+        errors.append(f"[{key}] minute {minute!r} 不是整数")
+    if schedule == "weekly":
+        dow = task.get("dayOfWeek", 0)
+        try:
+            if not (0 <= int(dow) <= 6):
+                errors.append(f"[{key}] dayOfWeek {dow} 越界 (0=Sun..6=Sat)")
+        except (TypeError, ValueError):
+            errors.append(f"[{key}] dayOfWeek {dow!r} 不是整数")
+    script = task.get("script")
+    if not isinstance(script, str) or not script.strip():
+        errors.append(f"[{key}] script 必须是非空字符串")
+    return errors
+
+
+def parse_hhmm(value: str) -> Tuple[int, int]:
+    """Parse 'HH:MM' or 'H:M' into (hour, minute). Raises ValueError on bad input."""
+    text = value.strip()
+    if ":" not in text:
+        raise ValueError(f"时间格式无效：{value!r}，需为 HH:MM")
+    hh, mm = text.split(":", 1)
+    hour = int(hh)
+    minute = int(mm)
+    if not (0 <= hour <= 23):
+        raise ValueError(f"小时越界：{hour}")
+    if not (0 <= minute <= 59):
+        raise ValueError(f"分钟越界：{minute}")
+    return hour, minute
+
+
+def save_task_settings(
+    updates: Dict[str, Dict[str, Any]],
+) -> Path:
+    """Merge per-task overrides into config['automation']['tasks'].
+
+    updates: {task_key: {field: value, ...}, ...}
+    Only the fields present in each update are touched; other fields keep their
+    current effective value (defaults + previously saved user overrides).
+    """
+    on_disk: Dict[str, Any] = {}
+    if CONFIG_PATH.exists():
+        try:
+            on_disk = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            on_disk = {}
+    if not isinstance(on_disk, dict):
+        on_disk = {}
+    auto = on_disk.get("automation")
+    if not isinstance(auto, dict):
+        auto = {}
+    tasks = auto.get("tasks")
+    if not isinstance(tasks, dict):
+        tasks = {}
+    for key, patch in updates.items():
+        existing = tasks.get(key)
+        if not isinstance(existing, dict):
+            existing = {}
+        existing.update(patch)
+        tasks[key] = existing
+    auto["tasks"] = tasks
+    on_disk["automation"] = auto
+    CONFIG_PATH.write_text(json.dumps(on_disk, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     globals()["CONFIG"] = load_config()
     return CONFIG_PATH
 
