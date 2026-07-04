@@ -1,8 +1,8 @@
 ---
 name: knowledge-iteration-system
 description: "四层知识蒸馏系统：捕获 Inbox、蒸馏知识、识别 Skill 候选、输出回流与知识库体检。用于想法记录、每日/每周复盘、Clipping 提炼、Skill 检测、反馈回流和跨平台知识库初始化。"
-version: 0.1.0
-phase: 1
+version: 0.3.4
+phase: 3
 ---
 
 # Knowledge Iteration System
@@ -11,13 +11,14 @@ phase: 1
 
 ## Phase Status
 
-**当前版本：v0.1.0（Phase 1 — 结构与规范层）**
+**当前版本：v0.3.4（Phase 3 — 输出回流 + Skill 升级路径 + LLM 批量统一 + per-task 自动化）**
 
 | Phase | 交付内容 | 状态 |
 |---|---|---|
 | Phase 1 | SKILL.md、references、templates、路径无关规范、Setup/Preflight 契约 | ✅ 已交付 |
 | Phase 2 | `scripts/` 目录下的自动化脚本（`kis_config.py`、`setup_preflight.py`、workflow 脚本、`run_all.py`、跨平台安装器） | ✅ 已交付 |
-| Phase 3 | 输出层反馈闭环（feedback_loop 从骨架→实现）、kis_llm batch API + 两套桥统一入口、Skill 升级路径工具（skill_upgrader.py） | ✅ 已交付 |
+| Phase 3 | 输出层反馈闭环 `feedback_loop.py` 实现落盘、`kis_llm` batch API、`skill_detector --llm=<off\|auto\|api\|file>` 统一四种模式、`skill_upgrader.py` Skill 升级路径工具 | ✅ 已交付 |
+| v0.2+ | 自动化改为 **per-task 独立调度**（9 个 LaunchAgent / cron / Task Scheduler），支持 `--list-tasks` / `--set-task` / `--enable-task` / `--disable-task` 精细控制 | ✅ 已交付 |
 
 > **安装提示**：本 Skill 的 `scripts/*.py` 与安装脚本均已随仓库发行（位于仓库的 `scripts/` 目录）。新安装参考 [`README.md`](../../README.md)：将 `scripts/` 复制到 Vault 根，可选配置 `.env`（LLM key），然后跑 `python3 scripts/setup_preflight.py --create-missing` 完成预检。
 
@@ -33,7 +34,7 @@ phase: 1
 
 1. **Inbox（输入层）** — 随手丢，不整理。想法、灵感、Clippings。
 2. **Distilled（蒸馏层）** — AI 提炼：日报、周报、想法追踪、Clippings 提炼。
-3. **Skills（技能层）** — 可复用方法论、工作流、Prompt 系统、Skill 候选。
+3. **Skills（技能层）** — 可复用方法论、工作流、Prompt 系统、Skill 候选（`skill_detector` 生成 EVAL 卡，`skill_upgrader` 出升级路线图）。
 4. **Output（输出层）** — 发布内容 + 反馈数据回流。
 
 ## Setup / Preflight Requirement
@@ -68,14 +69,16 @@ See `references/config-schema.md` and `templates/setup-preflight-report.md`.
 | 用户说 | 模式 | 对应脚本 |
 |--------|------|----------|
 | 初始化知识系统 / 检查四层结构 / 补齐文件夹 / 配置知识库路径 | Setup / Preflight | `setup_preflight.py` + `kis_config.py` |
+| 查看/修改自动化任务 / 改定时时间 / 启用禁用某任务 | Task 表管理 | `setup_preflight.py --list-tasks` / `--set-task NAME=HH:MM` / `--enable-task NAME` / `--disable-task NAME` |
 | 先记下 / 丢进知识库 / 这是一个灵感 | Inbox 捕获 | 无（手动写入） |
 | 今日蒸馏 / 整理今天 / 跑 daily | 每日蒸馏 | `daily_distill.py` |
 | 本周复盘 / 下周方向 / 总结趋势 | 每周复盘 | `weekly_review.py` |
 | 这个想法成熟吗 / 想法追踪 | 想法追踪 | `idea_tracker.py` |
 | 提炼这篇 / 小红书内容分析 | Clipping 提炼 | `clipping_refiner.py` |
+| 检测 Skill 候选 / 自动 Skill 沉淀 / 生成 EVAL 卡 | Skill 候选检测 | `skill_detector.py`（可选 `--llm=<off\|auto\|api\|file>`） |
 | 检查知识关联 / 知识织网 / 推荐双链 / 结构性链接 | 结构性链接建议 | `link_suggester.py` |
 | Skill 升级路径 / 下一步该做什么 / EVAL 卡变 Skill / 成熟度报告 | Skill 升级路线 | `skill_upgrader.py` |
-| 这篇效果怎么样 / 发布反馈 / 创作方法论总结 | 反馈回流 | `feedback_loop.py`（可选 `--llm` 启用抽样 LLM 总结） |
+| 这篇效果怎么样 / 发布反馈 / 创作方法论总结 | 反馈回流 | `feedback_loop.py`（可选 `--llm=<off\|auto\|api>` 启用抽样 LLM 总结） |
 | 季度体检 / 知识库健康度 | 季度审计 | `quarterly_audit.py` |
 | 全量跑一遍 | 全量运行 | 优先 `run_all.py`；兼容 `run_all.sh` |
 
@@ -118,7 +121,7 @@ The automation scripts live in the knowledge base root under `scripts/`. Treat t
 
 - `scripts/kis_config.py` — shared configuration, path resolution, default four-layer schema, folder alias detection, preflight checks, and safe creation of missing folders. All other Python scripts should use this module instead of hardcoding paths.
 - `scripts/setup_preflight.py` — setup/installation preflight entrypoint. Use it to inspect a user's knowledge base, show missing folders, write `.knowledge-iteration-system.json`, and optionally create only missing folders.
-- `scripts/kis_llm.py` — **[可选]** optional LLM 兑底模块：默认关闭，仅当环境变量/配置/`.env` 满足时启用。具体行为、隐私边界和关闭方法见上方“LLM 兼底调用（可选）”章节。
+- `scripts/kis_llm.py` — **[可选]** optional LLM 兜底模块：默认关闭，仅当环境变量/配置/`.env` 满足时启用。具体行为、隐私边界和关闭方法见上方“LLM 兜底调用（可选）”章节。
 
 Recommended commands:
 
@@ -148,27 +151,58 @@ python scripts/setup_preflight.py --create-missing
 - `scripts/install_automation.ps1` — Windows Task Scheduler installer; supports `-DryRun` and `-Uninstall`.
 - `scripts/install_automation_linux.sh` — Linux cron installer; supports `--dry-run` and `--uninstall`.
 
-> **LaunchAgent 命名说明**：macOS 自动化使用中性 label `com.knowledge-iteration.distiller`。旧版本使用的 `com.karpathy.knowledge.distiller` label 已弃用；install 脚本会在检测到旧 LaunchAgent 时自动 bootout 并清理旧 plist。
+> **LaunchAgent 命名说明（v0.2+ per-task）**：macOS 自动化为每个启用的任务生成一个独立 LaunchAgent，label 格式 `com.knowledge-iteration.<task_key>`，共 9 个：`daily_distill` / `idea_tracker` / `clipping_refiner` / `skill_detector` / `link_suggester` / `skill_upgrader` / `feedback_loop` / `weekly_review` / `quarterly_audit`。
 >
-> **plist 是生成产物**：`install_automation.sh` 会从 `.knowledge-iteration-system.json` 的 `automation` 配置动态生成包含绝对路径的 plist。**不要把生成后的 plist 提交到共享仓库或分发 Skill 包**，它包含本机绝对路径；仓库/Skill 包内应只保留生成器脚本。
+> 旧 label 会在新安装时被自动 bootout 并清理旧 plist：
+> - `com.karpathy.knowledge.distiller`（更早的历史命名）
+> - `com.knowledge-iteration.distiller`（v0.1 单任务命名）
+>
+> **plist 是生成产物**：`install_automation.sh` 会从 `.knowledge-iteration-system.json` 的 `automation.tasks` 表动态生成包含绝对路径的 plist。**不要把生成后的 plist 提交到共享仓库或分发 Skill 包**，它包含本机绝对路径；仓库/Skill 包内应只保留生成器脚本。
 
 Recommended cross-platform commands:
 
 ```bash
+# 全量 / 单步
 python scripts/run_all.py --dry-run --preflight
 python scripts/run_all.py --only daily --days 2
 python scripts/run_all.py --only weekly
+python scripts/run_all.py --only clipping
+python scripts/run_all.py --only skill        # skill_detector
 python scripts/run_all.py --only link
+python scripts/run_all.py --only upgrader     # skill_upgrader
+python scripts/run_all.py --only feedback
+python scripts/run_all.py --only audit
+python scripts/run_all.py                     # 依次跑全部 9 步
+
+# 结构性链接：先看再改（写用户源文件，强制先 dry-run）
 python scripts/link_suggester.py --apply-approved --dry-run
 python scripts/link_suggester.py --apply-approved
-python scripts/run_all.py
+
+# skill_detector LLM 路由
+python scripts/skill_detector.py                          # 纯正则
+python scripts/skill_detector.py --llm=auto               # kis_llm 可用则 batch API，否则降级文件桥
+python scripts/skill_detector.py --llm=api                # 强制走 kis_llm batch API
+python scripts/skill_detector.py --llm=file               # 强制走文件桥（手动拷贴到其他 AI 工具）
+
+# feedback_loop LLM 抽样
+python scripts/feedback_loop.py                           # 纯本地统计
+python scripts/feedback_loop.py --llm --sample 30         # 抽样 30 篇让 LLM 归纳规律
+
+# per-task 自动化管理
+python scripts/setup_preflight.py --list-tasks
+python scripts/setup_preflight.py --set-task daily_distill=09:00
+python scripts/setup_preflight.py --disable-task feedback_loop
+python scripts/setup_preflight.py --ask-tasks             # 交互式重配
+bash scripts/install_automation.sh --dry-run              # 预览会安装的 9 个 plist
+bash scripts/install_automation.sh                        # 实际安装
+bash scripts/install_automation.sh --uninstall            # 全部卸载
 ```
 
 Script rule: when adding or modifying workflow scripts, import `kis_config.py` helpers (`layer_path`, `subfolder_path`, `preflight`) instead of duplicating path/config logic.
 
-## LLM 兼底调用（可选）
+## LLM 兜底调用（可选）
 
-Phase 2 引入 `scripts/kis_llm.py` 作为可选的 LLM 兑底层，目前仅服务于 `skill_detector.py` 的五维度诊断和使用情境抽取。
+Phase 2 引入 `scripts/kis_llm.py` 作为可选的 LLM 兜底层。目前直接使用它的是 `skill_detector.py`（五维度诊断 + 使用情境抽取 + Skill 形态推断，均支持批量 API）和 `feedback_loop.py`（`call_json` 抽样归纳）。
 
 ### 默认行为
 
@@ -178,35 +212,36 @@ Phase 2 引入 `scripts/kis_llm.py` 作为可选的 LLM 兑底层，目前仅服
 - `.knowledge-iteration-system.json` 里配了 `llm.enabled: true` + `base_url` + `model` + `api_key_env`
 - 项目根目录 `.env` 里存在对应 KEY=xxx
 
-任何缺失、超时、HTTP 错误或 JSON 解析失败→ 抛 `LLMUnavailable` → 上层写入“LLM 不可用，使用正则结果”，**不阻断主流程**。
+任何缺失、超时、HTTP 错误或 JSON 解析失败→ 抛 `LLMUnavailable` → 上层写入"LLM 不可用，使用正则结果"，**不阻断主流程**。
 
 ### ⚠️ 隐私边界（重要）
 
-启用 LLM 兑底后，**Clipping / 想法的原文内容会被切片后发送到你配置的 LLM 端点**（OpenAI 或兼容端点）。具体行为：
+启用 LLM 兜底后，**Clipping / 想法的原文内容会被切片后发送到你配置的 LLM 端点**（OpenAI 或兼容端点）。具体行为：
 
 - 每个候选单独调用，单次 ≤ 8000 字符（`MAX_INPUT_CHARS`）
 - 内容级缓存写到 `.kis-cache/skill_eval/*.json`，重复跑不重复调
 - 传输内容：Clipping/想法的原文 + 提示词。**不会**传输完整知识库、文件名、日历、个人信息
 
-如果知识库含敏感内容（健康记录、客户数据、未公开创作、密登等）：
+如果知识库含敏感内容（健康记录、客户数据、未公开创作、密码/登录凭证等）：
 
 - **不要**设置 `KIS_LLM_API_KEY` / `OPENAI_API_KEY`
 - **不要**在配置里写 `llm.enabled: true`
 - 保持默认关闭即可完全本地运行
 
-### 两套 LLM 桥共存（临时状态）
+### 两套 LLM 桥已在 v0.3 统一进 `--llm=<mode>`
 
-`skill_detector.py` 历史上实现了一套 **文件桥**机制（写 `.llm_prompt.txt` 、等外部填 `.llm_result.json`），与 `kis_llm.py` 的直接 API 调用共存。选择颜制：
+`skill_detector.py` 历史上实现了一套 **文件桥**机制（写 `.llm_prompt.txt`、等外部填 `.llm_result.json`）；`kis_llm.py` 后来加入了直接 API 调用。v0.3 起两者已统一由 `--llm=<mode>` 控制（下文详述），共存问题解决。
 
-| 场景 | 推荐机制 |
-|---|---|
-| 有 API key、允许自动发外部 | `kis_llm.py`（直调） |
-| 无 API key、手动拷贴到其他 AI 工具 | `_call_llm` 文件桥 |
-| 完全不想用 LLM | `python scripts/skill_detector.py`（不加 `--llm`） |
+选择机制：
 
-未来 Phase 3 会将两套桥接机制完全统一。当前保持向后兼容。
+| 场景 | 推荐机制 | 命令 |
+|---|---|---|
+| 有 API key、允许自动发外部 | `kis_llm.py`（直调） | `--llm=api` |
+| 有 key 但想让脚本自动兜底 | 自动选路 | `--llm=auto` |
+| 无 API key、手动拷贴到其他 AI 工具 | 文件桥 | `--llm=file` |
+| 完全不想用 LLM | 纯正则 | `--llm=off`（默认） |
 
-内部 API（仅供 Phase 3 参考）：
+内部 API（Phase 3 稳定接口）：
 
 - `kis_llm.probe() -> (ok, message)` 不调用外部服务，只检查配置完整性
 - `kis_llm.call_section1(content)` 单候选五维度诊断
@@ -220,7 +255,7 @@ Phase 2 引入 `scripts/kis_llm.py` 作为可选的 LLM 兑底层，目前仅服
 
 所有其他 workflow 脚本（daily / weekly / clipping / idea / link / audit）**完全不调 LLM**，只靠本地规则与词频，保证无网环境、无 API 也能跑。`feedback_loop` 默认不调 LLM，用户显式 `--llm` 时才启用。
 
-### Section 2 与 Section 3 AI 兑底（Phase 3.1 交付）
+### Section 2 与 Section 3 AI 兜底（Phase 3.1 交付）
 
 EVAL 卡的「服务谁/用在哪/达到什么效果」（Section 2）与「建议的 Skill 形态」（Section 3）里的子项目，若正则抽不到，将自动调 kis_llm 推断并标记为【原文未明确，AI 分析结果】。真正抽不到的字段仍保留【待补充】，避免脑补。
 
@@ -239,9 +274,14 @@ run_all 中 skill_detector 默认使用 `--llm=auto`：
 - `api`：强制使用 kis_llm batch API
 - `file`：强制使用文件桥（写 `.llm_prompt.txt`、手动拷贴到其他 AI 工具、把结果填回 `.llm_result.json`）
 
-### `feedback_loop.py` 骨架状态
+### `feedback_loop.py` 当前状态（Phase 3 · γ 方案）
 
-Phase 2 阶段 `feedback_loop.py` **仅为占位实现**：仅扫描 `已发表/` 目录并输出统计。不会自动总结创作方法论、不会把占位报告写回技能层（避免偽造冕充知识资产）。Phase 3 会补齐实现并将产物落盘到 Distilled 层。
+**已从骨架升级为实现**：
+- 扫描 `第四层：输出层 (Output)/已发表/` 目录
+- 本地统计（平台分布 / 月度分布 / 高频词），产出 `第二层：蒸馏层 (Distilled)/输出回流分析.md`
+- 独立建议清单 `第二层：蒸馏层 (Distilled)/输出回流建议.md`（供人工审阅后决定是否手搬到 Skills 层）
+- 可选 LLM 抽样总结：`--llm=<off|auto|api>` + `--sample N`（默认 20），未启用时纯本地统计
+- **不静默改 Skills 层**：只输出建议，用户勾选后自行搬运
 
 ## Script Execution Rules
 

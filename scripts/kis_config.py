@@ -84,7 +84,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         #   Clippings 提炼 + 卡片   21:10
         #   Skill 候选检测           21:15
         #   结构性双链建议         21:20
-        #   输出反馈回流           21:25
+        #   Skill 升级路线图         21:25（紧跟 link_suggester 后 5min）
+        #   输出反馈回流           21:30
         #   每周知识复盘           周日 14:00
         #   季度知识健康审计       季度最后一天 12:00
         "tasks": {
@@ -133,13 +134,22 @@ DEFAULT_CONFIG: Dict[str, Any] = {
                 "minute": 20,
                 "enabled": True,
             },
+            "skill_upgrader": {
+                "label": "Skill 升级路线图",
+                "script": "skill_upgrader.py",
+                "args": [],
+                "schedule": "daily",
+                "hour": 21,
+                "minute": 25,
+                "enabled": True,
+            },
             "feedback_loop": {
                 "label": "输出反馈回流",
                 "script": "feedback_loop.py",
                 "args": [],
                 "schedule": "daily",
                 "hour": 21,
-                "minute": 25,
+                "minute": 30,
                 "enabled": True,
             },
             "weekly_review": {
@@ -462,6 +472,7 @@ TASK_ORDER: Tuple[str, ...] = (
     "clipping_refiner",
     "skill_detector",
     "link_suggester",
+    "skill_upgrader",
     "feedback_loop",
     "weekly_review",
     "quarterly_audit",
@@ -591,16 +602,52 @@ def save_task_settings(
 
 
 def render_system_intro(interval_days: Optional[int] = None) -> str:
-    """Render the '📚 知识迭代系统说明.md' body based on the current config + optional interval override."""
-    interval = interval_days if interval_days is not None else automation_interval_days()
+    """Render the '📚 知识迭代系统说明.md' body based on the current config + optional interval override.
+
+    interval_days is legacy: 若显式传入，则覆盖 daily_distill 的展示信息；
+    per-task 表始终按 automation_tasks() 真实值渲染。
+    """
     scan_days = automation_scan_days()
-    run_hour = automation_run_hour()
-    if interval is None:
-        automation_line = "未开启自动定时（需手动跑 `python3 scripts/run_all.py --only daily`）"
-    elif interval == 1:
-        automation_line = f"每天 {run_hour:02d}:00 自动跑每日蒸馏（每次扫描最近 {scan_days} 天）"
+    tasks = automation_tasks()
+    dow_labels = ("周日", "周一", "周二", "周三", "周四", "周五", "周六")
+
+    def _fmt_when(cfg: Dict[str, Any]) -> str:
+        sched = cfg.get("schedule", "daily")
+        hh = int(cfg.get("hour", 9))
+        mm = int(cfg.get("minute", 0))
+        hhmm = f"{hh:02d}:{mm:02d}"
+        if sched == "daily":
+            return f"每天 {hhmm}"
+        if sched == "weekly":
+            dow = int(cfg.get("dayOfWeek", 0))
+            return f"每周{dow_labels[dow]} {hhmm}"
+        if sched == "quarterly-last-day":
+            return f"季度最后一天 {hhmm}"
+        return f"{sched} {hhmm}"
+
+    def _local_ordered():
+        seen = set()
+        out = []
+        for k in TASK_ORDER:
+            if k in tasks:
+                out.append((k, tasks[k])); seen.add(k)
+        for k, c in tasks.items():
+            if k not in seen:
+                out.append((k, c))
+        return out
+
+    enabled_tasks = [(k, c) for k, c in _local_ordered() if c.get("enabled", True)]
+    if enabled_tasks:
+        automation_line = f"per-task 自动化表已启用 {len(enabled_tasks)} 个任务（详见下表），跑 `bash scripts/install_automation.sh` 安装成本机定时任务"
     else:
-        automation_line = f"每 {interval} 天 {run_hour:02d}:00 自动跑每日蒸馏（每次扫描最近 {scan_days} 天）"
+        automation_line = "所有自动化任务当前禁用（需手动跑 `python3 scripts/run_all.py`）"
+
+    # Interval override 兼容 legacy：只影响 daily_distill 那一行的展示
+    if interval_days is not None and "daily_distill" in tasks:
+        dd = dict(tasks["daily_distill"])
+        if interval_days >= 1:
+            dd["_legacy_interval_note"] = f"（legacy interval={interval_days} 天）"
+        tasks["daily_distill"] = dd
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
@@ -621,42 +668,70 @@ def render_system_intro(interval_days: Optional[int] = None) -> str:
         "├── 📁 每周复盘            ← weekly_review.py",
         "├── 📁 想法追踪           ← idea_tracker.py",
         "├── 📁 Clippings提炼      ← clipping_refiner.py（含卡片化提炼）",
-        "└── 📁 结构性链接建议   ← link_suggester.py",
+        "├── 📁 结构性链接建议   ← link_suggester.py",
+        "└── 📄 输出回流分析.md   ← feedback_loop.py",
         "",
-        "📁 第三层：技能层 (Skills)   ← skill_detector.py + 人工升级",
+        "📁 第三层：技能层 (Skills)",
+        "├── 📁 待整理/EVAL_*.md    ← skill_detector.py 生成候选卡",
+        "└── 📄 Skill 升级路线图.md ← skill_upgrader.py 生成升级建议",
         "",
-        "📁 第四层：输出层 (Output)   ← feedback_loop.py",
+        "📁 第四层：输出层 (Output)",
+        "└── 📁 已发表               ← feedback_loop.py 扫描并总结发布反馈",
         "```",
         "",
         "## 日常使用节奏",
         "",
-        "1. 有想法就丢进 《想法/灵感集》，不需要整理。",
+        "1. 有想法就丢进《想法/灵感集》，不需要整理。",
         "2. 看到好内容就存入《Clippings》（小红书拓展、Obsidian Web Clipper 等）。",
-        "3. 自动化定时跑每日蒸馏，手动跑 `run_all.py` 做入号蒸馏。",
+        "3. 自动化按 per-task 表定时跑（默认覆盖每日蒸馏 / 想法追踪 / Clipping 提炼 / Skill 检测 / 链接建议 / 反馈回流 / 每周复盘 / 季度审计）；想补历史或手动全量跑就 `python3 scripts/run_all.py`。",
         "4. 花 10 分钟看蒸馏报告，标记重点，沉淀到想法追踪或 Skill 候选。",
         "5. 每周看一次每周复盘，定下周方向。",
         "",
         "## 自动化已配置",
         "",
-        f"- 自动运行设置：**{automation_line}**",
-        f"- 扫描窗口：最近 **{scan_days}** 天新增内容",
-        "- 自动化安装入口：`scripts/install_automation.sh`（macOS）/ `install_automation.ps1`（Windows）/ `install_automation_linux.sh`（Linux）",
-        "- 修改自动化间隔：`python3 scripts/setup_preflight.py --set-daily-interval N` 后重新跑安装脚本",
+        f"- 状态：**{automation_line}**",
+        f"- 每日蒸馏扫描窗口：最近 **{scan_days}** 天新增内容",
+        "- 安装入口：`bash scripts/install_automation.sh`（macOS 9 个 LaunchAgent）/ `install_automation.ps1`（Windows Task Scheduler）/ `install_automation_linux.sh`（Linux cron）",
+        "- 查看/修改任务：`python3 scripts/setup_preflight.py --list-tasks` / `--set-task NAME=HH:MM` / `--enable-task NAME` / `--disable-task NAME` / `--ask-tasks`（交互向导）",
+        "- Legacy 兼容：`--set-daily-interval N` 仍可用，仅改 daily_distill 的间隔展示；建议直接用 per-task 命令",
+        "",
+        "### 当前任务表",
+        "",
+        "| 任务 | 脚本 | 触发时间 | 启用 |",
+        "|------|------|----------|------|",
+    ]
+    for key, cfg in _local_ordered():
+        label = cfg.get("label", key)
+        script = cfg.get("script", "")
+        when = _fmt_when(cfg)
+        note = cfg.get("_legacy_interval_note", "")
+        enabled = "✅" if cfg.get("enabled", True) else "⏸️"
+        lines.append(f"| {label} (`{key}`) | `scripts/{script}` | {when}{note} | {enabled} |")
+
+    lines.extend([
         "",
         "## 核心脚本一览",
         "",
         "| 脚本 | 功能 | 常用命令 |",
         "|------|------|----------|",
-        "| `scripts/setup_preflight.py` | 首次安装预检 / 创建四层目录 / 配置自动化间隔 | `python3 scripts/setup_preflight.py --create-missing` |",
+        "| `scripts/setup_preflight.py` | 首次安装预检 / 创建四层目录 / 管理自动化任务表 | `python3 scripts/setup_preflight.py --create-missing` |",
         "| `scripts/daily_distill.py` | 每日知识蒸馏 | `python3 scripts/daily_distill.py --days 2` |",
         "| `scripts/weekly_review.py` | 每周知识复盘 | `python3 scripts/weekly_review.py` |",
         "| `scripts/idea_tracker.py` | 想法成熟度追踪 | `python3 scripts/idea_tracker.py` |",
         "| `scripts/clipping_refiner.py` | Clippings 提炼 + 卡片 | `python3 scripts/clipping_refiner.py` |",
-        "| `scripts/skill_detector.py` | Skill 候选检测 | `python3 scripts/skill_detector.py` |",
-        "| `scripts/link_suggester.py` | 结构性双链建议 | `python3 scripts/link_suggester.py` |",
-        "| `scripts/feedback_loop.py` | 输出反馈回流 | `python3 scripts/feedback_loop.py` |",
+        "| `scripts/skill_detector.py` | Skill 候选检测（支持 `--llm=off/auto/api/file`） | `python3 scripts/skill_detector.py --llm=auto` |",
+        "| `scripts/link_suggester.py` | 结构性双链建议（`--apply-approved` 写回勾选项） | `python3 scripts/link_suggester.py` |",
+        "| `scripts/skill_upgrader.py` | 读取 EVAL 卡生成 Skill 升级路线图 | `python3 scripts/skill_upgrader.py` |",
+        "| `scripts/feedback_loop.py` | 输出反馈回流（可选 `--llm --sample N`） | `python3 scripts/feedback_loop.py` |",
         "| `scripts/quarterly_audit.py` | 季度知识健康审计 | `python3 scripts/quarterly_audit.py` |",
-        "| `scripts/run_all.py` | 一键全量跑 | `python3 scripts/run_all.py --dry-run --preflight` |",
+        "| `scripts/run_all.py` | 一键全量跑 9 步 | `python3 scripts/run_all.py`（先预览可加 `--dry-run --preflight`） |",
+        "",
+        "## LLM 兜底（默认关闭）",
+        "",
+        "- 只有 `skill_detector.py` 和 `feedback_loop.py` 会调 LLM，其它脚本纯本地。",
+        "- 启用条件：设置 `KIS_LLM_API_KEY` / `OPENAI_API_KEY`，或在 `.env` / 配置里填 `llm.enabled: true`。",
+        "- 隐私边界：启用后 Clipping / 想法原文会切片发到你配置的端点；敏感内容请保持默认关闭。",
+        "- `skill_detector.py --llm=<off|auto|api|file>` 四种模式，`file` 模式走本地文件桥手动拷贴。",
         "",
         "## 想法成熟度模型",
         "",
@@ -673,11 +748,11 @@ def render_system_intro(interval_days: Optional[int] = None) -> str:
         "2. 带 `--days 30` 跑一次 `daily_distill.py` 蒸馏历史内容。",
         "3. 跑 `python3 scripts/clipping_refiner.py` 把已有 Clippings 提炼为卡片。",
         "4. 跑 `python3 scripts/skill_detector.py` 看看有哪些内容可以沉淀为 Skill 草稿。",
-        "5. 选时间间隔后，跑 `bash scripts/install_automation.sh` 安装自动化。",
+        "5. 用 `python3 scripts/setup_preflight.py --list-tasks` 查看默认时间，必要时 `--set-task NAME=HH:MM` 调整，然后跑 `bash scripts/install_automation.sh` 安装自动化。",
         "",
         f"*本文件由系统在 {now} 自动生成，修改自动化配置后会重新写入。*",
         "",
-    ]
+    ])
     return "\n".join(lines)
 
 
