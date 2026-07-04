@@ -32,12 +32,37 @@ RUNNER="$SCRIPT_DIR/run_all.py"
 BEGIN_MARK="# BEGIN knowledge-iteration-system"
 END_MARK="# END knowledge-iteration-system"
 
-if command -v python3 >/dev/null 2>&1; then
-  PYTHON_BIN="$(command -v python3)"
-elif command -v python >/dev/null 2>&1; then
-  PYTHON_BIN="$(command -v python)"
-else
-  echo "❌ 未找到 Python。请先安装 Python 3。"
+PYTHON_BIN=""
+# cron 环境的 PATH 很小，`python3` 可能指向旧版本。
+# run_all.py 需 3.10+（PEP 604 联合类型），仅 3.9 下缓解靠 __future__ 不够：
+# 其他子脚本也用了 3.10+ 语法。所以探测并写绝对路径。
+pick_python() {
+  local candidate="$1"
+  [ -z "$candidate" ] && return 1
+  "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1 || return 1
+  local resolved
+  resolved="$("$candidate" -c 'import sys; print(sys.executable)' 2>/dev/null || true)"
+  [ -z "$resolved" ] && resolved="$candidate"
+  PYTHON_BIN="$resolved"
+  return 0
+}
+
+for cand in \
+  "$(command -v python3 || true)" \
+  "$(command -v python3.13 || true)" \
+  "$(command -v python3.12 || true)" \
+  "$(command -v python3.11 || true)" \
+  "$(command -v python3.10 || true)" \
+  "/usr/local/bin/python3" \
+  "/usr/bin/python3" \
+  "$(command -v python || true)"; do
+  if pick_python "$cand"; then
+    break
+  fi
+done
+
+if [ -z "$PYTHON_BIN" ]; then
+  echo "❌ 未找到 Python 3.10+，请先安装（run_all.py 依赖 PEP 604 联合类型语法）。"
   exit 1
 fi
 

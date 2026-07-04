@@ -21,20 +21,26 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $VaultDir = Split-Path -Parent $ScriptDir
 $RunAllPy = Join-Path $ScriptDir "run_all.py"
 
-# 检测 Python
+# 检测 Python（需 3.10+，run_all.py 依赖 PEP 604 联合类型，
+# 其他子脚本也用了 3.10+ 语法）。任务计划环境 PATH 可能与交互式不同，
+# 所以解析真实绝对路径后再写入任务。
 $PythonCmd = $null
-foreach ($cmd in @("python3", "python")) {
+$Candidates = @("python3.13", "python3.12", "python3.11", "python3.10", "python3", "python", "py")
+foreach ($cmd in $Candidates) {
     try {
-        $result = & $cmd --version 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            $PythonCmd = $cmd
-            break
+        $exe = & $cmd -c "import sys; print(sys.executable)" 2>$null
+        if ($LASTEXITCODE -eq 0 -and $exe) {
+            $ok = & $exe -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                $PythonCmd = $exe.Trim()
+                break
+            }
         }
     } catch {}
 }
 
 if (-not $PythonCmd) {
-    Write-Error "未找到 Python。请先安装 Python 3。"
+    Write-Error "未找到 Python 3.10+。请先安装（run_all.py 依赖 PEP 604 联合类型语法）。"
     exit 1
 }
 

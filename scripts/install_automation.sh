@@ -37,12 +37,42 @@ LABEL="com.knowledge-iteration.distiller"
 LEGACY_LABEL="com.karpathy.knowledge.distiller"
 LEGACY_PLIST_DST="$HOME/Library/LaunchAgents/${LEGACY_LABEL}.plist"
 
-PYTHON_BIN="$(command -v python3 || true)"
+PYTHON_BIN=""
+# 优先挑 3.10+（run_all.py 用了 PEP 604 `list[str] | None` 联合类型语法）。
+# LaunchAgent 环境 PATH 不含 Homebrew / Framework，`/usr/bin/env python3` 会退回系统
+# /usr/bin/python3（macOS 自带 3.9），触发 TypeError。所以这里必须写绝对路径。
+pick_python() {
+  local candidate="$1"
+  [ -z "$candidate" ] && return 1
+  "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1 || return 1
+  # 解析出真实绝对路径（避免 shim / symlink 在 launchd 里失效）
+  local resolved
+  resolved="$("$candidate" -c 'import sys; print(sys.executable)' 2>/dev/null || true)"
+  [ -z "$resolved" ] && resolved="$candidate"
+  PYTHON_BIN="$resolved"
+  return 0
+}
+
+for cand in \
+  "$(command -v python3 || true)" \
+  "$(command -v python3.13 || true)" \
+  "$(command -v python3.12 || true)" \
+  "$(command -v python3.11 || true)" \
+  "$(command -v python3.10 || true)" \
+  "/opt/homebrew/bin/python3" \
+  "/usr/local/bin/python3" \
+  "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3" \
+  "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3" \
+  "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3" \
+  "/Library/Frameworks/Python.framework/Versions/3.10/bin/python3" \
+  "$(command -v python || true)"; do
+  if pick_python "$cand"; then
+    break
+  fi
+done
+
 if [ -z "$PYTHON_BIN" ]; then
-  PYTHON_BIN="$(command -v python || true)"
-fi
-if [ -z "$PYTHON_BIN" ]; then
-  echo "❌ 未找到 Python，请先安装 Python 3。"
+  echo "❌ 未找到 Python 3.10+，请先安装（run_all.py 依赖 PEP 604 联合类型语法）。"
   exit 1
 fi
 
@@ -125,8 +155,7 @@ generate_plist() {
     <string>${LABEL}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/env</string>
-        <string>python3</string>
+        <string>${PYTHON_BIN}</string>
         <string>${VAULT}/scripts/run_all.py</string>
         <string>--only</string>
         <string>daily</string>
