@@ -19,7 +19,27 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-VAULT = SCRIPT_DIR.parent
+
+
+def _resolve_vault_root() -> Path:
+    """定位 Vault 根目录，支持三种部署形态：
+
+    1. **环境变量 `KIS_VAULT_ROOT` 显式声明**（优先级最高）。
+       适用：scripts 与 Vault 分开部署（如 scripts 用软链 / clone 到 dev 目录 /
+       多 Vault 共享同一套 scripts）。例：
+           export KIS_VAULT_ROOT="/path/to/vault"
+    2. **`__file__.parent.parent` 的父目录**（历史默认）。
+       适用：scripts 直接拷贝到 Vault 根下、未经软链。
+       注意 `.resolve()` 会展开软链：如果 `scripts` 是指向外部目录的软链，
+       这个默认会担误 Vault，请改用环境变量方式。
+    """
+    env_value = os.environ.get("KIS_VAULT_ROOT", "").strip()
+    if env_value:
+        return Path(env_value).expanduser().resolve()
+    return SCRIPT_DIR.parent
+
+
+VAULT = _resolve_vault_root()
 CONFIG_NAME = ".knowledge-iteration-system.json"
 CONFIG_PATH = VAULT / CONFIG_NAME
 

@@ -177,6 +177,35 @@ else:
 - 建议使用 PowerShell / Windows Terminal。
 - Python 命令可能是 `python`，不一定是 `python3`。
 
+## 环境变量
+
+系统识别以下环境变量（都可选）：
+
+| 变量 | 作用 | 示例 |
+|---|---|---|
+| `KIS_VAULT_ROOT` | 显式声明 Vault 根目录，覆盖默认「从 `scripts/` 的父目录推断」的行为 | `/path/to/vault` |
+| `KIS_LLM_BASE_URL` / `KIS_LLM_MODEL` / `KIS_LLM_API_KEY` | LLM 兜底配置（详见 `.env.example`） | 见 `.env.example` |
+| `KIS_LLM_DISABLE_JSON_MODE` | 供应商不支持 `response_format=json_object` 时设为 `1` | `1` |
+
+### 何时需要 `KIS_VAULT_ROOT`
+
+默认情况下 `kis_config.py` 用 `Path(__file__).resolve().parent.parent` 定位 Vault 根，也就是「scripts 目录的父目录」。这适合最典型的部署：把 `scripts/` 直接拷到 Vault 根。
+
+但下列场景**必须**显式声明 `KIS_VAULT_ROOT`：
+
+1. **`scripts/` 是软链**：如果把 Vault 里的 `scripts` 做成软链指向外部（例如 git 工作树 `~/dev/knowledge-iteration-system/scripts`），`.resolve()` 会跟随软链，把 Vault 定位到外部仓库目录，导致 `.env`、`.knowledge-iteration-system.json`、四层子文件夹全部找不到。
+2. **scripts 与 Vault 分开部署**：`scripts/` 放在 dev 目录、Vault 是另一个目录，直接跑 `python3 /path/to/scripts/run_all.py` 时。
+3. **多 Vault 共用一份 scripts**：给不同 Vault 切换时用环境变量指定。
+
+在这些情况下：
+
+```bash
+export KIS_VAULT_ROOT="/path/to/your/vault"
+python3 /path/to/scripts/run_all.py
+```
+
+或在 LaunchAgent / cron / Task Scheduler 里传入相同的环境变量。
+
 ## 安全边界
 
 - 不把这个配置文件当成公开模板上传到共享 Skill 包。
