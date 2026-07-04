@@ -17,7 +17,7 @@
 
 ## ✨ 特性
 
-- 🤖 **可选 LLM 兜底**：默认关闭，配了 API key 就自动上（智谱 GLM / OpenAI / DeepSeek 任选）
+- 🤖 **可选 LLM 兜底**：默认关闭，自己声明任意 OpenAI 兼容供应商就自动上（OpenAI / DeepSeek / 智谱 GLM / 通义 / 火山方舟 / 自搭建都行）
 - 🌍 **三平台自动化**：macOS LaunchAgent / Linux cron / Windows Task Scheduler，一键安装
 - 🔒 **隐私优先**：所有分析本地跑，只有明确配置了才调外部 API
 - 📊 **9 步全量流水线**：`run_all.py` 一条命令跑完所有蒸馏
@@ -137,15 +137,37 @@ Your Vault/
 
 ## 🤖 LLM 兜底说明
 
-**默认关闭**。配置 `.env` 或环境变量之后自动启用：
+**默认关闭。不预设任何供应商，需要你自己声明。**
+
+向你选定的 LLM 供应商拿以下 3 项（供应商必须提供 OpenAI 兼容的 `/chat/completions` 接口）：
+
+| 字段 | 含义 | 示例 |
+|---|---|---|
+| `KIS_LLM_BASE_URL` | API 根地址（一般以 `/v1`、`/v3`、`/paas/v4` 结尾） | `https://api.openai.com/v1` |
+| `KIS_LLM_MODEL` | 模型名，必须是该供应商列表里的一个 | `gpt-4o-mini` |
+| `KIS_LLM_API_KEY` | 供应商颁发的 API Key | `sk-...` |
+
+把它们写进 Vault 根目录的 `.env`（拷贝 `.env.example` 改名即可）：
 
 ```bash
-KIS_LLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4
-KIS_LLM_MODEL=glm-4.5-flash
-KIS_LLM_API_KEY=your-key
+KIS_LLM_BASE_URL=<你的供应商 base url>
+KIS_LLM_MODEL=<模型名>
+KIS_LLM_API_KEY=<你的 key>
 ```
 
-LLM 用途：
+验证配置：`python3 scripts/kis_llm.py`（会打印 `READY` 或 `DEGRADED`）。
+
+### 兼容开关（选填）
+
+部分供应商不支持 `response_format={"type":"json_object"}`（如火山方舟 Ark plan endpoint 的 `ark-code-latest`），会报 `InvalidParameter` / `BadRequest`。遇到时在 `.env` 里加一行：
+
+```bash
+KIS_LLM_DISABLE_JSON_MODE=1
+```
+
+prompt 里已经明确要求 JSON，脚本仍能正常解析。
+
+### LLM 用途：
 - `skill_detector` 里 Section 2（服务谁·用在哪·达到什么效果）和 Section 3（Skill 形态）**全走 AI 分析**
 - `feedback_loop` 抽样总结发布内容特点（可关，默认关）
 
@@ -154,7 +176,7 @@ LLM 用途：
 - 每篇内容单独发一个 request，不会批量泄露整个 Vault
 - 响应缓存在本地 `.kis-cache/`（`.gitignore` 已排）
 
-**换 provider**：改 `.env` 里的 BASE_URL / MODEL / API_KEY 就行，任何 OpenAI 兼容接口都可以。
+**换 provider**：改 `.env` 里的 BASE_URL / MODEL / API_KEY 就行，任何 OpenAI 兼容接口都可以。完整可选供应商示例（OpenAI / DeepSeek / 智谱 / 火山方舟 Ark 等）见 `.env.example`。
 
 ## 📖 深入了解
 

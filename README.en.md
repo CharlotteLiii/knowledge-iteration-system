@@ -17,7 +17,7 @@ It runs an automated pipeline over the four kinds of content scattered across yo
 
 ## ✨ Features
 
-- 🤖 **Optional LLM fallback** — off by default; kicks in automatically when you provide an API key (Zhipu GLM / OpenAI / DeepSeek — anything OpenAI-compatible)
+- 🤖 **Optional LLM fallback** — off by default. Declare any OpenAI-compatible provider yourself and it kicks in automatically (OpenAI / DeepSeek / Zhipu GLM / Tongyi / Volcengine Ark / self-hosted — anything works)
 - 🌍 **Cross-platform automation** — one-command installers for macOS LaunchAgent / Linux cron / Windows Task Scheduler
 - 🔒 **Privacy-first** — every analysis runs locally; external APIs are only called when you explicitly configure one
 - 📊 **9-step full pipeline** — a single `run_all.py` runs the whole distillation flow
@@ -137,15 +137,37 @@ Your Vault/
 
 ## 🤖 LLM fallback
 
-**Off by default.** Enabled automatically once you set up `.env` or matching environment variables:
+**Off by default. No provider is preset — you declare your own.**
+
+Get the following 3 fields from your chosen LLM provider (the provider must expose an OpenAI-compatible `/chat/completions` endpoint):
+
+| Field | Meaning | Example |
+|---|---|---|
+| `KIS_LLM_BASE_URL` | API base URL (usually ends in `/v1`, `/v3`, `/paas/v4`) | `https://api.openai.com/v1` |
+| `KIS_LLM_MODEL` | A model name in that provider's catalog | `gpt-4o-mini` |
+| `KIS_LLM_API_KEY` | API key issued by the provider | `sk-...` |
+
+Put them in `.env` at your Vault root (copy `.env.example` and rename):
 
 ```bash
-KIS_LLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4
-KIS_LLM_MODEL=glm-4.5-flash
-KIS_LLM_API_KEY=your-key
+KIS_LLM_BASE_URL=<your provider base url>
+KIS_LLM_MODEL=<model name>
+KIS_LLM_API_KEY=<your key>
 ```
 
-Where the LLM is used:
+Verify: `python3 scripts/kis_llm.py` (prints `READY` or `DEGRADED`).
+
+### Compatibility switch (optional)
+
+Some providers reject `response_format={"type":"json_object"}` (e.g. Volcengine Ark's plan endpoint with `ark-code-latest`) and return `InvalidParameter` / `BadRequest`. When you hit that, add one line to `.env`:
+
+```bash
+KIS_LLM_DISABLE_JSON_MODE=1
+```
+
+The prompts still explicitly ask for JSON and the scripts parse the response fine.
+
+### Where the LLM is used:
 - `skill_detector` — Section 2 (who / where / expected outcome) and Section 3 (Skill form factor) go **fully through AI analysis**
 - `feedback_loop` — samples published content for pattern summaries (togglable, off by default)
 
@@ -154,7 +176,7 @@ Where the LLM is used:
 - One request per document — the whole Vault is never dumped in bulk
 - Responses cache locally under `.kis-cache/` (already in `.gitignore`)
 
-**Switching providers:** just change `BASE_URL` / `MODEL` / `API_KEY` in `.env`. Any OpenAI-compatible endpoint works.
+**Switching providers:** just change `BASE_URL` / `MODEL` / `API_KEY` in `.env`. Any OpenAI-compatible endpoint works. See `.env.example` for ready-to-use provider blocks (OpenAI / DeepSeek / Zhipu / Volcengine Ark, etc.).
 
 ## 📖 Learn more
 
