@@ -1,7 +1,7 @@
 ---
 name: knowledge-iteration-system
 description: "四层知识蒸馏系统：捕获 Inbox、蒸馏知识、识别 Skill 候选、输出回流与知识库体检。用于想法记录、每日/每周复盘、Clipping 提炼、Skill 检测、反馈回流和跨平台知识库初始化。"
-version: 0.3.4
+version: 0.3.5
 phase: 3
 ---
 
