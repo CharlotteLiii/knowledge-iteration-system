@@ -212,3 +212,56 @@ python3 /path/to/scripts/run_all.py
 - 不在未确认时覆盖用户已有配置。
 - 不自动删除无效路径；先报告并让用户确认。
 - 不把用户私人绝对路径写进公开文档或共享示例。
+
+## Taxonomy 配置（知识分类 / 主题 / 桥接规则）
+
+内容类型判定、自动标签、结构性链接的主题匹配与桥接规则，统一由一份 **taxonomy 配置**驱动，不再散落在各脚本里硬编码。
+
+### 加载来源与优先级
+
+1. `scripts/taxonomy.default.json` —— 随 Skill 发行的默认值（与历史硬编码逐字节一致）。
+2. `<vault>/taxonomy.json` —— **可选**用户覆盖，存在时与默认值**深合并**（缺省字段回落默认，合并逻辑同主配置 `_merge_dict`）。
+
+两者都由 `kis_config.load_taxonomy()` 读取，暴露成模块级单例 `TAXONOMY`，并提供 getter：`content_types()` / `type_shortcuts()` / `tag_rules()` / `themes()` / `bridges()` / `domain_rules()`。`clipping_refiner.py` 与 `link_suggester.py` 都从这里取值。
+
+### 字段说明
+
+| 顶层键 | 类型 | 用途 | 消费者 |
+|---|---|---|---|
+| `contentTypes` | `{类型: {keywords:[], asset:str, priority:float}}` | Clipping 类型判定关键词、资产化建议、类型先验权重 | clipping_refiner |
+| `typeShortcuts` | `[{type, score, all:[], any:[]}]` | 强组合命中直接定类型的短路规则（`all` 全含 + `any` 任一） | clipping_refiner |
+| `tagRules` | `{标签: [关键词]}` | 自动标签命中规则 | clipping_refiner |
+| `themes` | `{主题: [关键词]}` | 结构性链接的主题匹配 | link_suggester |
+| `bridges` | `{内容类型: [主题]}` | Clipping 类型 → 想法主题的桥接加分 | link_suggester |
+| `domainRules` | `[{idea_contains?/idea_regex?, clip_regex, score, reason_*}]` | 领域启发式桥接（小红书 / 美业 / AI 工作流等） | link_suggester |
+
+### 自定义方法
+
+在知识库根目录放一个 `taxonomy.json`，只写想改的部分即可，例如替换掉个人主题、换成自己的领域：
+
+```json
+{
+  "themes": {
+    "我的主题A": ["关键词1", "关键词2"]
+  },
+  "contentTypes": {
+    "我的类型": { "keywords": ["xxx"], "asset": "xxx 卡片", "priority": 2.0 }
+  }
+}
+```
+
+> 注意：顶层键会整体深合并；对 `themes`/`contentTypes` 这类字典是**按 key 合并**（你写的 key 覆盖/新增，未写的 key 保留默认）。若要彻底移除某个默认主题，需要显式在 `taxonomy.json` 里重定义整张表。
+
+### 相似度后端（link_suggester）
+
+`link_suggester.py` 的关键词重合打分支持可插拔后端，通过 `--similarity` 选择：
+
+- `tfidf`（默认）：按语料 IDF 加权共享词，罕见专有词权重更高、泛词更低；量纲与旧版一致。纯本地，无 API、无 embedding、无隐私外发。
+- `legacy`：旧版裸交集计数（共享词数 × 2，上限 25），用于回归对拍或复现历史报告。
+
+```bash
+python scripts/link_suggester.py                       # 默认 tfidf
+python scripts/link_suggester.py --similarity legacy   # 复现旧版打分
+```
+
+两种后端都是本地计算；未来若接入 embedding 语义相似，将作为新增后端挂到同一 `--similarity` 开关，主流程不变。

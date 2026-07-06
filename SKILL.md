@@ -105,7 +105,7 @@ See `references/config-schema.md` and `templates/setup-preflight-report.md`.
 对外部内容打分（0-10）、提炼金句、打标签、去重、判断转化价值。模板见 `templates/clipping-refine-report.md`。
 
 ### 结构性链接建议
-生成 Clipping、想法、Skill 草稿、提炼卡之间的链接建议。默认只输出带复选框的报告，不自动改原文。用户在报告中把确认采用的 `- [ ]` 改成 `- [x]` 后，才可运行 `link_suggester.py --apply-approved` 写回已确认链接。建议优先用于“知识织网”而不是自动批量双链。
+生成 Clipping 与想法之间的链接建议（基于高分 Clippings × 想法）。默认只输出带复选框的报告，不自动改原文。用户在报告中把确认采用的 `- [ ]` 改成 `- [x]` 后，才可运行 `link_suggester.py --apply-approved` 写回已确认链接。主题/桥接规则均从 taxonomy 配置读取（见 `references/config-schema.md`）；关键词相似度默认用 TF-IDF 加权（`--similarity legacy` 可回到旧版打分）。建议优先用于“知识织网”而不是自动批量双链。
 
 ### 反馈回流
 分析发布表现数据、用户反馈，沉淀标题/选题/视觉/表达/平台经验。模板见 `templates/output-feedback-report.md`。
@@ -138,7 +138,7 @@ python scripts/setup_preflight.py --create-missing
 - `scripts/idea_tracker.py` — idea maturity tracking.
 - `scripts/clipping_refiner.py` — Clippings quality scoring, tagging, quote extraction, and refinement cards.
 - `scripts/skill_detector.py` — scans Inbox for reusable Skill candidates; writes drafts to the Skills layer.
-- `scripts/link_suggester.py` — generates checkbox-based structural link suggestions across Clippings, ideas, Skill drafts, and refined cards; `--apply-approved` writes back only checked suggestions.
+- `scripts/link_suggester.py` — generates checkbox-based structural link suggestions between high-scoring Clippings and ideas; themes/bridge rules come from the taxonomy config; keyword similarity uses a pluggable backend (`--similarity tfidf|legacy`, default TF-IDF, fully local); `--apply-approved` writes back only checked suggestions.
 - `scripts/skill_upgrader.py` — **[Phase 3]** 读取 `技能层/待整理/EVAL_*.md`，根据 Skill 成熟度模型 Level 0-5 生成升级路线图，产物落 `技能层/Skill 升级路线图.md`。支持 `--min-yes N` 过滤、`--dry-run` 预览。
 - `scripts/feedback_loop.py` — **[Phase 3 实现]** 扫描 `输出层/已发表`，本地统计（平台/月度/高频词）+ 可选 LLM 抽样总结（默认关闭），产出 `蒸馏层/输出回流分析.md` + `蒸馏层/输出回流建议.md`。支持 `--llm=<off|auto|api>`、`--sample N`、`--dry-run`。**不直接写 Skills 层**，回流建议供人工勾选后手动搬运。
 - `scripts/quarterly_audit.py` — knowledge base health audit.
@@ -175,6 +175,8 @@ python scripts/run_all.py --only audit
 python scripts/run_all.py                     # 依次跑全部 9 步
 
 # 结构性链接：先看再改（写用户源文件，强制先 dry-run）
+python scripts/link_suggester.py                          # 默认 tfidf 相似度
+python scripts/link_suggester.py --similarity legacy      # 旧版裸交集打分（回归/复现）
 python scripts/link_suggester.py --apply-approved --dry-run
 python scripts/link_suggester.py --apply-approved
 
