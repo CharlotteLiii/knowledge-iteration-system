@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -14,7 +15,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
-from kis_config import iter_markdown_files, layer_path, subfolder_path
+from kis_config import iter_markdown_files, subfolder_path
+from kis_config import themes as _themes_config
+from kis_config import bridges as _bridges_config
+from kis_config import domain_rules as _domain_rules_config
 
 try:
     from clipping_refiner import analyze_file as analyze_clipping
@@ -23,9 +27,6 @@ except Exception:  # pragma: no cover - fallback for standalone environments
 
 IDEAS = subfolder_path("ideas")
 CLIPPINGS = subfolder_path("clippings")
-CLIPPING_REFINE = subfolder_path("clippingRefine")
-SKILLS = layer_path("skills")
-DISTILLED = layer_path("distilled")
 OUTPUT = subfolder_path("linkSuggestions")
 DEFAULT_REPORT = OUTPUT / "结构性链接建议.md"
 APPROVED_START = "<!-- KIS_APPROVED_LINKS_START -->"
@@ -37,31 +38,11 @@ STOPWORDS = {
     "2026", "06", "07", "ai", "AI", "的", "了", "和", "与", "在", "是", "有", "为", "到",
 }
 
-THEME_KEYWORDS: Dict[str, List[str]] = {
-    "AI 工作流": ["ai", "agent", "codex", "claude", "prompt", "提示词", "自动化", "工作流", "obsidian", "harness"],
-    "知识管理": ["知识库", "obsidian", "笔记", "卡片", "蒸馏", "知识管理", "skill"],
-    "内容/IP": ["小红书", "账号", "内容", "选题", "视频", "脚本", "栏目", "博主", "变现", "阅读赚钱"],
-    "职业机会": ["remote", "远程", "面试", "岗位", "职业", "求职", "公司", "学习路径"],
-    "商业投研": ["投资", "美股", "财经", "投研", "商业", "客户", "运营", "增长", "风险", "日报"],
-    "创意表达": ["创意", "故事", "表达", "拍摄", "编导", "短视频", "vlog", "街头采访"],
-    "个人成长": ["成长", "冥想", "心智", "关系", "快乐", "淡定", "女性", "中女", "herstory"],
-    "美业经营": ["美业", "门店", "客户", "美容", "顾问", "店长", "复购", "留存", "客单"],
-}
-
-BRIDGE_RULES: Dict[str, List[str]] = {
-    "内容方法论": ["女性内容 IP", "内容/IP", "创意表达", "个人成长"],
-    "创意素材": ["创意表达", "内容/IP"],
-    "信息源清单": ["AI 工作流", "知识管理", "职业机会"],
-    "行业情报": ["AI 工作流", "职业机会", "商业投研"],
-    "工作流教程": ["AI 工作流", "知识管理", "美业经营"],
-    "工具教程": ["AI 工作流", "知识管理"],
-    "Prompt/模板": ["AI 工作流", "知识管理", "美业经营"],
-    "案例拆解": ["职业机会", "内容/IP", "商业投研"],
-    "职业机会": ["职业机会", "个人成长"],
-    "商业投研": ["商业投研", "美业经营"],
-    "观点文章": ["个人成长", "职业机会", "AI 工作流"],
-    "心智成长": ["个人成长", "创意表达"],
-}
+# THEME_KEYWORDS / BRIDGE_RULES / 领域启发规则均改为从 taxonomy 配置读取
+# （kis_config.themes / bridges / domain_rules）。历史默认值见 scripts/taxonomy.default.json。
+THEME_KEYWORDS: Dict[str, List[str]] = _themes_config()
+BRIDGE_RULES: Dict[str, List[str]] = _bridges_config()
+DOMAIN_RULES: List[dict] = _domain_rules_config()
 
 
 @dataclass
@@ -117,6 +98,103 @@ def themes_for(text: str) -> List[str]:
         if any(normalize(kw) in haystack for kw in kws):
             themes.append(theme)
     return themes
+
+
+# ---------------------------------------------------------------------------
+# 可插拔相似度 backend
+#
+# 关键词重合得分从“裸交集计数”升级为可选的 TF-IDF 加权。两种后端：
+#   - legacy : 共享 token 数 × 2，上限 25（历史行为）
+#   - tfidf  : 按 IDF 加权共享 token，除以平均 IDF 得到“有效共享 token 数”，
+#              再走同样的 ×2 / cap 25。量纲与 legacy 一致，但罕见专有词权重>1、
+#              泛词权重<1，插插链质量更好。纯本地、无 API、无隐私风险。
+#
+# 未来接 embedding 只需新增一个 backend + 一个 --similarity 选项，主流程不变。
+# ---------------------------------------------------------------------------
+
+
+class RuleOverlapBackend:
+    """Legacy backend: raw shared-token count × 2, capped at 25."""
+
+    name = "legacy"
+
+    def __init__(self, corpus: List["Asset"] | None = None) -> None:
+        self._corpus = corpus or []
+
+    def keyword_component(self, a: "Asset", b: "Asset") -> Tuple[int, List[str]]:
+        a_tokens = tokens(a.text)
+        b_tokens = tokens(b.text)
+        shared = [w for w in (a_tokens.keys() & b_tokens.keys()) if len(w) >= 2]
+        shared = sorted(shared, key=lambda w: (-(a_tokens[w] + b_tokens[w]), w))
+        score = min(25, len(shared) * 2) if shared else 0
+        return score, shared[:8]
+
+
+class TfidfBackend:
+    """IDF-weighted shared-token scoring, magnitude-compatible with legacy.
+
+    Builds a document-frequency table once from the corpus. A shared token's
+    contribution is its IDF; the summed IDF is divided by the corpus mean IDF to
+    yield an "effective shared-token count", then scored with the same ×2 / cap-25
+    formula as the legacy backend.
+    """
+
+    name = "tfidf"
+
+    def __init__(self, corpus: List["Asset"]) -> None:
+        self._corpus = corpus
+        n_docs = max(len(corpus), 1)
+        df: Counter = Counter()
+        self._doc_tokens: Dict[str, Counter] = {}
+        for asset in corpus:
+            toks = tokens(asset.text)
+            self._doc_tokens[asset.path.as_posix()] = toks
+            for term in toks:
+                if len(term) >= 2:
+                    df[term] += 1
+        # Smoothed IDF: log((1 + N) / (1 + df)) + 1  (always > 0)
+        self._idf: Dict[str, float] = {
+            term: math.log((1 + n_docs) / (1 + freq)) + 1.0 for term, freq in df.items()
+        }
+        self._mean_idf = (sum(self._idf.values()) / len(self._idf)) if self._idf else 1.0
+
+    def _tokens_for(self, asset: "Asset") -> Counter:
+        return self._doc_tokens.get(asset.path.as_posix()) or tokens(asset.text)
+
+    def keyword_component(self, a: "Asset", b: "Asset") -> Tuple[int, List[str]]:
+        a_tokens = self._tokens_for(a)
+        b_tokens = self._tokens_for(b)
+        shared = [w for w in (a_tokens.keys() & b_tokens.keys()) if len(w) >= 2]
+        if not shared:
+            return 0, []
+        # Order by informativeness (IDF desc), then alphabetically for determinism.
+        shared.sort(key=lambda w: (-self._idf.get(w, self._mean_idf), w))
+        weighted = sum(self._idf.get(w, self._mean_idf) for w in shared)
+        effective = weighted / self._mean_idf if self._mean_idf else len(shared)
+        score = min(25, round(effective * 2))
+        return score, shared[:8]
+
+
+_BACKENDS = {"legacy": RuleOverlapBackend, "tfidf": TfidfBackend}
+_DEFAULT_BACKEND = "tfidf"
+_ACTIVE_BACKEND: object | None = None
+
+
+def build_backend(kind: str, corpus: List["Asset"]):
+    factory = _BACKENDS.get(kind, _BACKENDS[_DEFAULT_BACKEND])
+    return factory(corpus)
+
+
+def set_backend(backend) -> None:
+    global _ACTIVE_BACKEND
+    _ACTIVE_BACKEND = backend
+
+
+def get_backend():
+    global _ACTIVE_BACKEND
+    if _ACTIVE_BACKEND is None:
+        _ACTIVE_BACKEND = RuleOverlapBackend([])
+    return _ACTIVE_BACKEND
 
 
 def first_paragraph(content: str, limit: int = 600) -> str:
@@ -177,47 +255,46 @@ def load_clippings() -> List[Asset]:
     return assets
 
 
-def load_skill_drafts() -> List[Asset]:
-    draft_dir = SKILLS / "待整理"
-    assets: List[Asset] = []
-    if not draft_dir.exists():
-        return assets
-    for path in iter_markdown_files(draft_dir):
-        if not path.name.startswith("DRAFT_"):
-            continue
-        content = safe_read(path)
-        name = path.stem
-        # Keep the DRAFT_ title because Obsidian links need the actual file stem.
-        assets.append(Asset(
-            name=name,
-            path=path,
-            kind="skill_draft",
-            layer="Skills/Drafts",
-            text=f"{name}\n{first_paragraph(content, 1600)}",
-        ))
-    return assets
-
-
-def load_refined_cards() -> List[Asset]:
-    assets: List[Asset] = []
-    if not CLIPPING_REFINE.exists():
-        return assets
-    for path in iter_markdown_files(CLIPPING_REFINE):
-        if not path.name.startswith("提炼_"):
-            continue
-        content = safe_read(path)
-        assets.append(Asset(
-            name=path.stem,
-            path=path,
-            kind="refined_card",
-            layer="Distilled/ClippingRefine",
-            text=f"{path.stem}\n{first_paragraph(content, 1400)}",
-        ))
-    return assets
-
-
 def name_without_prefix(name: str) -> str:
     return re.sub(r"^(DRAFT_|提炼_)", "", name)
+
+
+def _bridge_score(clip: Asset, idea: Asset, clip_is_source: bool) -> Tuple[int, List[str]]:
+    """Directional clipping<->idea bridge scoring, driven by taxonomy config.
+
+    `clip` is always the clipping asset, `idea` always the idea asset, regardless
+    of which one is the source of the suggestion. `clip_is_source` only changes
+    the human-facing reason wording so both directions read naturally.
+    """
+    score = 0
+    reasons: List[str] = []
+
+    bridge_themes = set(BRIDGE_RULES.get(clip.ctype, []))
+    idea_themes = set(themes_for(idea.text))
+    matched_bridge = sorted(bridge_themes & idea_themes)
+    if matched_bridge:
+        score += 18 + min(12, len(matched_bridge) * 4)
+        prefix = "类型可参考：" if clip_is_source else "可参考类型："
+        reasons.append(prefix + clip.ctype + " → " + "、".join(matched_bridge[:3]))
+
+    idea_text = normalize(idea.text)
+    clip_text = normalize(clip.text)
+    for rule in DOMAIN_RULES:
+        contains = rule.get("idea_contains")
+        if contains and contains not in idea_text:
+            continue
+        idea_regex = rule.get("idea_regex")
+        if idea_regex and not re.search(idea_regex, idea_text):
+            continue
+        clip_regex = rule.get("clip_regex")
+        if clip_regex and not re.search(clip_regex, clip_text):
+            continue
+        score += int(rule.get("score", 0))
+        key = "reason_clip_to_idea" if clip_is_source else "reason_idea_to_clip"
+        reason = rule.get(key) or rule.get("reason_clip_to_idea") or ""
+        if reason:
+            reasons.append(reason)
+    return score, reasons
 
 
 def similarity(a: Asset, b: Asset) -> Tuple[int, List[str], List[str]]:
@@ -242,54 +319,19 @@ def similarity(a: Asset, b: Asset) -> Tuple[int, List[str], List[str]]:
         score += min(25, len(shared_themes) * 8)
         reasons.append("主题相同：" + "、".join(shared_themes[:3]))
 
-    a_tokens = tokens(a.text)
-    b_tokens = tokens(b.text)
-    shared = [word for word in (a_tokens.keys() & b_tokens.keys()) if len(word) >= 2]
-    shared = sorted(shared, key=lambda w: a_tokens[w] + b_tokens[w], reverse=True)
-    if shared:
-        score += min(25, len(shared) * 2)
+    kw_score, shared = get_backend().keyword_component(a, b)
+    if kw_score:
+        score += kw_score
         reasons.append("关键词重合：" + "、".join(shared[:6]))
 
-    if a.kind == "clipping" and b.kind == "skill_draft" and a_base in b_base:
-        score += 20
-        reasons.append("Clipping 已生成对应 Skill 草稿")
     if a.kind == "clipping" and b.kind == "idea":
-        bridge_themes = set(BRIDGE_RULES.get(a.ctype, []))
-        idea_themes = set(themes_for(b.text))
-        matched_bridge = sorted(bridge_themes & idea_themes)
-        if matched_bridge:
-            score += 18 + min(12, len(matched_bridge) * 4)
-            reasons.append("类型可参考：" + a.ctype + " → " + "、".join(matched_bridge[:3]))
-        clip_text = normalize(a.text)
-        idea_text = normalize(b.text)
-        if "小红书" in idea_text and re.search(r"视频|内容|选题|账号|博主|变现|阅读赚钱|脚本|栏目", clip_text):
-            score += 16
-            reasons.append("可作为小红书/内容账号参考")
-        if "美业" in idea_text and re.search(r"客户|运营|商业|风险|增长|投研|日报|工作流|自动化|prompt|提示词|系统", clip_text):
-            score += 16
-            reasons.append("可作为美业经营/客户资产系统参考")
-        if re.search(r"系统|skill|提示词|流程|框架", idea_text) and re.search(r"codex|工作流|自动化|prompt|提示词|agent", clip_text):
-            score += 12
-            reasons.append("可借鉴为 AI 工作流/系统化方法")
-
-    if a.kind == "idea" and b.kind == "clipping":
-        idea_themes = set(themes_for(a.text))
-        bridge_themes = set(BRIDGE_RULES.get(b.ctype, []))
-        matched_bridge = sorted(idea_themes & bridge_themes)
-        if matched_bridge:
-            score += 18 + min(12, len(matched_bridge) * 4)
-            reasons.append("可参考类型：" + b.ctype + " → " + "、".join(matched_bridge[:3]))
-        idea_text = normalize(a.text)
-        clip_text = normalize(b.text)
-        if "小红书" in idea_text and re.search(r"视频|内容|选题|账号|博主|变现|阅读赚钱|脚本|栏目", clip_text):
-            score += 16
-            reasons.append("可为小红书/内容账号提供素材")
-        if "美业" in idea_text and re.search(r"客户|运营|商业|风险|增长|投研|日报|工作流|自动化|prompt|提示词|系统", clip_text):
-            score += 16
-            reasons.append("可为美业经营/客户资产系统提供参考")
-        if re.search(r"系统|skill|提示词|流程|框架", idea_text) and re.search(r"codex|工作流|自动化|prompt|提示词|agent", clip_text):
-            score += 12
-            reasons.append("可借鉴为 AI 工作流/系统化方法")
+        bridge, bridge_reasons = _bridge_score(a, b, clip_is_source=True)
+        score += bridge
+        reasons.extend(bridge_reasons)
+    elif a.kind == "idea" and b.kind == "clipping":
+        bridge, bridge_reasons = _bridge_score(b, a, clip_is_source=False)
+        score += bridge
+        reasons.extend(bridge_reasons)
 
     return score, reasons[:4], shared[:8]
 
@@ -310,13 +352,16 @@ def suggest_pairs(source: List[Asset], targets: List[Asset], min_score: int = 28
     return result
 
 
-def load_all_assets() -> Tuple[List[Asset], List[Asset], List[Asset], List[Asset]]:
-    """Load all asset types used by this workflow."""
+def load_all_assets() -> Tuple[List[Asset], List[Asset]]:
+    """Load asset types used by this workflow (ideas + clippings).
+
+    Skill drafts and refined cards are intentionally not loaded: the report only
+    renders clipping<->idea links, so write-back targets are always ideas or
+    clippings.
+    """
     ideas = load_ideas()
     clippings = load_clippings()
-    drafts = load_skill_drafts()
-    refined = load_refined_cards()
-    return ideas, clippings, drafts, refined
+    return ideas, clippings
 
 
 def asset_index(assets: Iterable[Asset]) -> Dict[str, Asset]:
@@ -345,18 +390,17 @@ def render_suggestions(title: str, sources: Dict[str, Asset], suggestions: Dict[
     return lines
 
 
-def generate_report() -> Tuple[Path, int]:
+def generate_report(similarity_backend: str = _DEFAULT_BACKEND) -> Tuple[Path, int]:
     print("🕸 正在生成结构性链接建议...")
     ideas = load_ideas()
     clippings = load_clippings()
-    drafts = load_skill_drafts()
-    refined = load_refined_cards()
 
     high_clippings = [c for c in clippings if c.score >= 50]
     clipping_by_name = {a.name: a for a in high_clippings}
     idea_by_name = {a.name: a for a in ideas}
-    draft_by_name = {a.name: a for a in drafts}
-    refined_by_name = {a.name: a for a in refined}
+
+    # Build the similarity backend from the scored corpus (ideas + high clippings).
+    set_backend(build_backend(similarity_backend, [*ideas, *high_clippings]))
 
     clipping_to_idea = suggest_pairs(high_clippings, ideas, min_score=34, limit_per_source=3)
     idea_to_clipping = suggest_pairs(ideas, high_clippings, min_score=34, limit_per_source=5)
@@ -466,8 +510,8 @@ def apply_approved(report_path: Path = DEFAULT_REPORT, dry_run: bool = False) ->
     Only source notes with checked items are touched. Existing generated block is replaced;
     manual text outside the markers is preserved.
     """
-    ideas, clippings, drafts, refined = load_all_assets()
-    assets = asset_index([*ideas, *clippings, *drafts, *refined])
+    ideas, clippings = load_all_assets()
+    assets = asset_index([*ideas, *clippings])
     approved = parse_approved_links(report_path)
 
     changed_files = 0
@@ -495,6 +539,11 @@ def main() -> None:
     parser.add_argument("--apply-approved", action="store_true", help="只写回报告中已勾选的 - [x] 建议。")
     parser.add_argument("--report", type=Path, default=DEFAULT_REPORT, help="结构性链接建议报告路径。")
     parser.add_argument("--dry-run", action="store_true", help="预览写回数量，不修改文件。")
+    parser.add_argument(
+        "--similarity",
+        choices=["tfidf", "legacy"],
+        default=_DEFAULT_BACKEND,
+        help="关键词相似度后端：tfidf（默认，IDF 加权）或 legacy（旧版裸计数）。均为纯本地。")
     args = parser.parse_args()
 
     print("=" * 40)
@@ -510,8 +559,8 @@ def main() -> None:
             print("⚠️ 未找到源文件：" + "、".join(missing[:10]))
         return
 
-    output, count = generate_report()
-    print(f"✅ 链接建议已生成：{count} 条")
+    output, count = generate_report(similarity_backend=args.similarity)
+    print(f"✅ 链接建议已生成：{count} 条（相似度后端：{args.similarity}）")
     print(f"   位置：{output}")
 
 
