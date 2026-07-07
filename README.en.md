@@ -241,6 +241,7 @@ The prompts still explicitly ask for JSON and the scripts parse the response fin
 ### Where the LLM is used:
 - `skill_detector` — Section 2 (who / where / expected outcome) and Section 3 (Skill form factor) go **fully through AI analysis**
 - `feedback_loop` — samples published content for pattern summaries (togglable, off by default)
+- `daily_distill --classify=llm` — semantic input-layer classification (defaults to keyword, not LLM; auto-degrades when offline/unconfigured)
 
 **Privacy boundary:**
 - The API is only called when you explicitly run with `--llm=auto|api`

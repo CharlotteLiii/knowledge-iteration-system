@@ -277,6 +277,7 @@ prompt 里已经明确要求 JSON，脚本仍能正常解析。
 ### LLM 用途：
 - `skill_detector` 里 Section 2（服务谁·用在哪·达到什么效果）和 Section 3（Skill 形态）**全走 AI 分析**
 - `feedback_loop` 抽样总结发布内容特点（可关，默认关）
+- `daily_distill --classify=llm` 输入层语义分类（默认走关键词，不走 LLM；无网/未配置自动降级）
 
 **隐私边界**：
 - 只有你明确调 `--llm=auto|api` 才会走 API
