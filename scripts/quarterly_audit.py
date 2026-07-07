@@ -33,7 +33,7 @@ SUBFOLDER_LABELS = {
 
 GENERATED_MARKERS = (
     "知识蒸馏", "每周复盘", "Clippings总览报告", "提炼_", "想法成熟度全景",
-    "知识资产审计", "DRAFT_", "README",
+    "知识资产审计", "DRAFT_", "README", "Skill 可行性评估索引",
 )
 
 # Official skill package docs are useful files but do not always participate in the Obsidian graph.

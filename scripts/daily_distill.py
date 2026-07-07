@@ -339,11 +339,15 @@ def classify_input_docs(files: List[Dict[str, object]], mode: str = "keyword") -
             stats["proposed"] += 1
             kis_catalog.queue_pending(pending, path, name, "llm_proposal", result.proposals)
 
+    # 对账清理：移除指向已删除/重命名文件的僵尸条目（防止目录出现死链）。
+    pruned = kis_catalog.prune_missing(catalog)
+
     kis_catalog.save_catalog(catalog)
     kis_catalog.save_pending(pending)
     doc = kis_catalog.render_catalog_doc(catalog)
     print(f"🗂 分类目录已更新：{doc}")
-    print(f"   分类 {stats['classified']} 篇，其中落入「{OTHER}」 {stats['other']} 篇，待审队列新增 {stats['other'] + stats['proposed']} 条")
+    prune_note = f"，清理失效条目 {pruned} 条" if pruned else ""
+    print(f"   分类 {stats['classified']} 篇，其中落入「{OTHER}」 {stats['other']} 篇，待审队列新增 {stats['other'] + stats['proposed']} 条{prune_note}")
     return stats
 
 

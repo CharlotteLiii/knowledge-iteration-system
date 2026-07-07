@@ -11,6 +11,7 @@ v2 重构（Phase 1）：
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import sys
 from dataclasses import dataclass, field
@@ -554,9 +555,64 @@ def load_cache() -> Dict[str, Any]:
     return {}
 
 
+def _cache_key(name: str, content: str) -> str:
+    """稳定的内容缓存键。
+
+    历史版用 `hash(content)`，Python 字符串 hash 受 PYTHONHASHSEED 影响逐进程
+    随机，导致缓存跨运行几乎永远不命中（每次全量重跑 LLM）。
+    改用 md5 后缓存可跨运行稳定命中。
+    """
+    digest = hashlib.md5(content.encode("utf-8", errors="ignore")).hexdigest()[:12]
+    return f"{name}:{digest}"
+
+
 def save_cache(data: Dict[str, Any]) -> None:
     OUTPUT.mkdir(parents=True, exist_ok=True)
     CACHE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+_S2_KEYS = ["target_user", "trigger_scene", "pain_point", "expected_effect", "unsuitable_scene"]
+_S3_FIELD_KEYS = ["skill_type", "inputs", "outputs", "tools_required", "not_required"]
+
+
+def _serialize_s2(s2: "Section2Result") -> Dict[str, Any]:
+    return {k: {"value": getattr(s2, k).value, "source": getattr(s2, k).source} for k in _S2_KEYS}
+
+
+def _restore_s2(data: Dict[str, Any]) -> "Section2Result":
+    s2 = Section2Result()
+    for k in _S2_KEYS:
+        d = data.get(k) or {}
+        f = getattr(s2, k)
+        f.value = d.get("value", f.value)
+        f.source = d.get("source", f.source)
+    return s2
+
+
+def _serialize_s3(s3: "Section3Result") -> Dict[str, Any]:
+    out: Dict[str, Any] = {k: {"value": getattr(s3, k).value, "source": getattr(s3, k).source} for k in _S3_FIELD_KEYS}
+    out["step_count"] = s3.step_count
+    return out
+
+
+def _restore_s3(data: Dict[str, Any]) -> "Section3Result":
+    s3 = Section3Result()
+    for k in _S3_FIELD_KEYS:
+        d = data.get(k) or {}
+        f = getattr(s3, k)
+        f.value = d.get("value", f.value)
+        f.source = d.get("source", f.source)
+    s3.step_count = int(data.get("step_count", 0) or 0)
+    return s3
+
+
+def _s2_complete(s2: "Section2Result") -> bool:
+    """s2 是否已有内容（至少一个字段非空且非待补充）。"""
+    return any(getattr(s2, k).value.strip() for k in _S2_KEYS)
+
+
+def _s3_complete(s3: "Section3Result") -> bool:
+    return bool(s3.skill_type.value.strip() or s3.inputs.value.strip() or s3.outputs.value.strip())
 
 
 # ── LLM Bridge ──────────────────────────────────────────────────────
@@ -831,7 +887,7 @@ def scan_candidates(min_score: int = 3) -> List[Dict[str, Any]]:
 
 
 def process_candidates(llm_mode: str = "off") -> Tuple[List[Dict[str, Any]], Path]:
-    """主处理流程：扫描 → 正则诊断 → LLM 兜底 → 生成 EVAL 卡 → 生成 README。
+    """主处理流程：扫描 → 正则诊断 → LLM 兜底 → 生成 EVAL 卡 → 生成 Skill 可行性评估索引。
 
     llm_mode:
       - "off" ：不调用任何 LLM
@@ -859,20 +915,25 @@ def process_candidates(llm_mode: str = "off") -> Tuple[List[Dict[str, Any]], Pat
         # 正则诊断 Section 1
         s1 = diagnose_section1_regex(content, name)
 
-        # 检查缓存
-        cache_key = f"{name}:{hash(content) % 100000}"
-        if cache_key in cache:
-            cached = cache[cache_key]
-            if "s1" in cached:
-                for dim_name, data in cached["s1"].items():
-                    dim = getattr(s1, dim_name)
-                    dim.status = data.get("status", dim.status)
-                    dim.evidence = data.get("evidence", dim.evidence)
-                    dim.source = data.get("source", dim.source)
+        # 检查缓存（稳定 key）
+        cache_key = _cache_key(name, content)
+        cached = cache.get(cache_key) if cache_key in cache else None
+        if cached and "s1" in cached:
+            for dim_name, data in cached["s1"].items():
+                dim = getattr(s1, dim_name)
+                dim.status = data.get("status", dim.status)
+                dim.evidence = data.get("evidence", dim.evidence)
+                dim.source = data.get("source", dim.source)
 
-        # 收集需要 LLM 的维度
+        # 从缓存恢复 s2/s3（命中则不再调 LLM）
+        s2 = _restore_s2(cached["s2"]) if cached and "s2" in cached else Section2Result()
+        s3 = _restore_s3(cached["s3"]) if cached and "s3" in cached else Section3Result()
+        s2_cached = cached is not None and "s2" in cached
+        s3_cached = cached is not None and "s3" in cached
+
+        # 收集需要 LLM 的维度（仅在未缓存时）
         has_llm_gap_s1 = any(d.status == "⚠️" and d.source == "none" for d in s1.dimensions())
-        if has_llm_gap_s1 and llm_on:
+        if has_llm_gap_s1 and llm_on and not (cached and "s1" in cached):
             llm_needed_s1.append({
                 "name": name,
                 "preview": c["preview"],
@@ -881,18 +942,16 @@ def process_candidates(llm_mode: str = "off") -> Tuple[List[Dict[str, Any]], Pat
                                        s1.dimensions())],
             })
 
-        # Section 2：不走正则，交给 AI 全字段推断（Phase 3.2）
-        s2 = Section2Result()
-        if llm_on:
+        # Section 2：全字段 AI 推断；缓存命中则跳过。
+        if llm_on and not s2_cached:
             llm_needed_s2.append({
                 "name": name,
                 "preview": c["preview"],
                 "s2": {},
             })
 
-        # Section 3：同样全走 AI，包括 skill_type 与 step_count（Phase 3.2）
-        s3 = Section3Result()
-        if llm_on:
+        # Section 3：同样全走 AI；缓存命中则跳过。
+        if llm_on and not s3_cached:
             llm_needed_s3.append({
                 "name": name,
                 "preview": c["preview"],
@@ -908,36 +967,54 @@ def process_candidates(llm_mode: str = "off") -> Tuple[List[Dict[str, Any]], Pat
             "score": c["score"],
             "yes_count": s1.yes_count,
             "conclusion": s1.conclusion_key,
-            "eval_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "eval_time": (cached.get("eval_time") if cached else None) or datetime.now().strftime("%Y-%m-%d %H:%M"),
         })
 
     # LLM 兜底（如果启用）
     if llm_on and (llm_needed_s1 or llm_needed_s2 or llm_needed_s3):
         _run_llm_augmentation(evals, llm_needed_s1, llm_needed_s2, llm_needed_s3, llm_mode)
 
-    # 更新缓存
+    # 更新缓存（稳定 key + s1/s2/s3 全缓存，使未变化文档下次不再调 LLM）
     for ev in evals:
-        cache_key = f"{ev['name']}:{hash(ev['content']) % 100000}"
-        cache[cache_key] = {
+        cache_key = _cache_key(str(ev["name"]), str(ev["content"]))
+        entry: Dict[str, Any] = {
             "s1": {n: {"status": d.status, "evidence": d.evidence, "source": d.source}
                    for n, d in zip(["reusable", "stable_input", "clear_steps", "verifiable_output", "real_case"],
                                    ev["s1"].dimensions())},
             "eval_time": ev["eval_time"],
         }
+        if _s2_complete(ev["s2"]):
+            entry["s2"] = _serialize_s2(ev["s2"])
+        if _s3_complete(ev["s3"]):
+            entry["s3"] = _serialize_s3(ev["s3"])
+        cache[cache_key] = entry
     save_cache(cache)
 
-    # 生成 EVAL 卡片
+    # 生成 EVAL 卡片（增量写：内容无变化则不重写，避免无谓 IO/覆盖）
     OUTPUT.mkdir(parents=True, exist_ok=True)
+    cards_written = 0
     for ev in evals:
         card = generate_eval_card(ev["name"], ev["content"], ev["s1"], ev["s2"], ev["s3"],
                                   {"summary": best_one_liner(ev["content"], ev["name"])})
         card_path = OUTPUT / f"EVAL_{ev['name']}.md"
-        card_path.write_text(card, encoding="utf-8")
+        old = card_path.read_text(encoding="utf-8") if card_path.exists() else None
+        if old != card:
+            card_path.write_text(card, encoding="utf-8")
+            cards_written += 1
+    print(f"   EVAL 卡：写入 {cards_written} 张（变化/新增），跳过 {len(evals) - cards_written} 张未变化")
 
-    # 生成 README
+    # 生成索引（全量，需所有 evals 做排名）。文件名固定为「Skill 可行性评估索引」。
     readme = generate_readme(evals)
-    readme_path = OUTPUT / "README.md"
+    readme_path = OUTPUT / "Skill 可行性评估索引.md"
     readme_path.write_text(readme, encoding="utf-8")
+
+    # 迁移：清掉历史遗留的旧文件名 README.md，避免与新索引并存。
+    legacy = OUTPUT / "README.md"
+    if legacy.exists():
+        try:
+            legacy.unlink()
+        except Exception:
+            pass
 
     return evals, OUTPUT
 

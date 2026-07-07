@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
+import kis_state
 from kis_config import is_stopword, iter_markdown_files, subfolder_path
 from kis_config import content_types as _content_types
 from kis_config import tag_rules as _tag_rules
@@ -23,6 +24,7 @@ from kis_config import type_shortcuts as _type_shortcuts
 
 CLIPPINGS = subfolder_path("clippings")
 OUTPUT = subfolder_path("clippingRefine")
+CARD_TASK_KEY = "clipping_refiner_cards"
 
 VALUE_KEYWORDS = ["方法", "流程", "步骤", "案例", "数据", "研究", "对比", "框架", "模板", "prompt", "提示词", "技巧", "指南", "系统", "实操"]
 NOISE_PATTERNS = (
@@ -889,14 +891,38 @@ def generate_report() -> tuple[Path | None, int, int, int]:
     output_path = OUTPUT / "Clippings总览报告.md"
     output_path.write_text("\n".join(report), encoding="utf-8")
 
-    for f in card_candidates:
-        card_path = OUTPUT / f"提炼_{f['name']}.md"
-        card_path.write_text(generate_card(f), encoding="utf-8")
+    # 逐篇提炼卡：增量写。总览报告始终全量（要算全局排名/统计），
+    # 但卡片只给"新增/内容变化"的 clipping 重生成，避免每次重写全部、
+    # 也避免覆盖用户手改的老卡。缺失的卡会自愈补写。
+    _write_cards_incremental(card_candidates)
 
     return output_path, len(files_data), len(excellent), len(good)
 
 
+def _write_cards_incremental(card_candidates: List[Dict[str, object]]) -> int:
+    """只给变化的候选写提炼卡。返回本次实际写卡数。"""
+    scan = kis_state.scan_incremental(CARD_TASK_KEY, [CLIPPINGS], recursive=True)
+    changed = {str(p.resolve()) for p in scan.files}
+    written = 0
+    for f in card_candidates:
+        card_path = OUTPUT / f"提炼_{f['name']}.md"
+        fpath = f.get("path")
+        is_changed = bool(fpath) and str(Path(str(fpath)).resolve()) in changed
+        # 变化的候选 → 重写；未变化但卡片缺失 → 自愈补写；否则跳过。
+        if is_changed or not card_path.exists():
+            card_path.write_text(generate_card(f), encoding="utf-8")
+            written += 1
+    kis_state.commit_scan(CARD_TASK_KEY, scan)
+    print(f"   提炼卡：写入 {written} 篇（增量），跳过 {len(card_candidates) - written} 篇未变化")
+    return written
+
+
 if __name__ == "__main__":
+    import sys
+    if "--reset-cards" in sys.argv:
+        removed = kis_state.reset_task(CARD_TASK_KEY)
+        print(f"{'✅ 已清除' if removed else 'ℹ️ 无'} 提炼卡 checkpoint（任务：{CARD_TASK_KEY}）")
+        sys.exit(0)
     print("=" * 40)
     print("📑 Clippings 内容提炼流水线")
     print("=" * 40)
