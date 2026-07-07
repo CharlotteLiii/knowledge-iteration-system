@@ -52,7 +52,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "output": "第四层：输出层 (Output)",
     },
     "subfolders": {
-        "ideas": "第一层：输入层 (Inbox)/想法/灵感集",
+        "ideas": "第一层：输入层 (Inbox)/想法",
         "clippings": "第一层：输入层 (Inbox)/Clippings",
         "dailyDistill": "第二层：蒸馏层 (Distilled)/每日蒸馏",
         "weeklyReview": "第二层：蒸馏层 (Distilled)/每周复盘",
