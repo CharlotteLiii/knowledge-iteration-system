@@ -98,6 +98,19 @@ def save_pending(pending: Dict) -> None:
         pass
 
 
+def prune_missing(catalog: Dict) -> int:
+    """对账清理：移除 catalog 中指向已不存在文件的僵尸条目。
+
+    解决“删除/重命名输入文档后，分类目录残留指向不存在文件的死链 [[旧名]]”。
+    返回清理掉的条目数。
+    """
+    docs = catalog.get("docs", {})
+    stale = [key for key in docs if not Path(key).exists()]
+    for key in stale:
+        del docs[key]
+    return len(stale)
+
+
 def upsert_doc(catalog: Dict, path: Path, name: str, categories: List[str],
                source: str, content_hash: str) -> None:
     """把一篇文档的分类写入 catalog（覆盖式，manual 不被自动覆盖）。"""
