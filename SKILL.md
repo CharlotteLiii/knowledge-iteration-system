@@ -93,10 +93,10 @@ See `references/config-schema.md` and `templates/setup-preflight-report.md`.
 快速记录，不打断思路。输出包含：原始内容、来源、时间、初步标签、后续处理建议。模板见 `templates/inbox-entry.md`。
 
 ### 每日蒸馏
-扫描近期新增，生成日报：新增统计、高频关键词、核心观点、可沉淀资产、明日建议。模板见 `templates/daily-distill-report.md`。
+扫描新增（默认自上次运行以来的增量，见下方“增量 checkpoint”），生成日报：新增统计、高频关键词、核心观点、可沉淀资产、明日建议。同时对增量文档做输入层分类（见下方“输入层分类目录”）。模板见 `templates/daily-distill-report.md`。
 
 ### 每周复盘
-汇总一周趋势、主题聚类、最有潜力想法、下周方向。模板见 `templates/weekly-review-report.md`。
+汇总一周趋势、主题聚类、最有潜力想法、下周方向。默认也走增量 checkpoint（独立于日报）。模板见 `templates/weekly-review-report.md`。
 
 ### 想法追踪
 评估想法成熟度：🌱种子 → 🌿发芽 → 🌳成熟 → ✅已落地。补充判断：继续投入价值（高/中/低）。模板见 `templates/idea-maturity-report.md`。
@@ -112,6 +112,22 @@ See `references/config-schema.md` and `templates/setup-preflight-report.md`.
 
 ### 季度审计
 知识库健康度诊断：活跃主题、孤立节点、冷知识、需合并/升级/归档内容、知识资产化率。模板见 `templates/quarterly-audit-report.md`。
+
+### 增量 checkpoint（每日/每周）
+每日蒸馏与每周复盘默认以 **checkpoint 真增量** 扫描：只处理自上次运行以来新增/内容变化的文档（状态存于 `<vault>/.kis_state.json`，日/周各自独立 key）。
+- 判据：mtime 快筛 + 内容 hash 兑底——网盘同步刷新 mtime 不会把未改内容的旧文件误当新增。
+- 漏跑自动补扫（记录上次处理到哪）；连跑不重叠（成功后才推进 checkpoint）。
+- 手动覆盖：`--days N` / `--since YYYY-MM-DD` 走时间窗、**不读写 checkpoint**；`--reset-checkpoint` 清除状态（下次全量视为增量）。
+
+### 输入层分类目录
+每日蒸馏时对增量文档做 **多标签分类**（一篇可属多个分类），分类维度复用 taxonomy 的 `contentTypes` key。
+- 数据源：`<vault>/catalog.json`（唯一真相）；渲染产物：蒸馏层 `输入层分类目录.md`（按分类看 / 按文档看 双视图，勿手改）。
+- 后端：`--classify=keyword`（默认、离线）/ `llm`（opt-in、降级安全）/ `off`。零命中 → 归入「其他」。
+- 疑难件（落入「其他」或 LLM 提议新分类）进待审队列 `<vault>/.kis_pending_categories.json`，由 agent 异步问用户处理，**脚本不阻塞**。
+
+### Taxonomy onboarding
+首次使用无 `<vault>/taxonomy.json` 时，run_all 会提示可声明自定义分类（不声明也能用默认）。
+- `kis_onboard.py --status|--template|--validate|--write`。脚本**不阻塞问答**：agent 引导用户声明分类，再用 `--write` 把结构化 JSON 落盘（校验 + 与默认深合并）。
 
 ## Core Script Files
 
@@ -133,8 +149,12 @@ python scripts/setup_preflight.py --create-missing
 
 ### Workflow Scripts
 
-- `scripts/daily_distill.py` — daily distillation; reads Inbox ideas and Clippings; writes to daily distill folder.
-- `scripts/weekly_review.py` — weekly review; summarizes recent ideas and Clippings.
+- `scripts/daily_distill.py` — daily distillation; checkpoint incremental by default (`--days/--since` manual override, `--reset-checkpoint` to clear); runs input-layer classification (`--classify=keyword|llm|off`).
+- `scripts/weekly_review.py` — weekly review; checkpoint incremental by default (independent task key from daily).
+- `scripts/kis_state.py` — per-task run state / incremental checkpoint (`<vault>/.kis_state.json`); mtime fast-filter + content-hash tiebreak; used by daily/weekly.
+- `scripts/kis_classifier.py` — pluggable multi-label input classifier reusing taxonomy `contentTypes` keys; KeywordClassifier (default, offline) + LLMClassifier (opt-in, cached, auto-degrades); zero-hit falls back to 其他.
+- `scripts/kis_catalog.py` — `catalog.json` source of truth + renders `输入层分类目录.md` (by-category / by-document views) + pending queue for async human triage.
+- `scripts/kis_onboard.py` — non-blocking taxonomy onboarding (`--status/--template/--validate/--write`); agent runs the guided Q&A, script only validates + writes `taxonomy.json`.
 - `scripts/idea_tracker.py` — idea maturity tracking.
 - `scripts/clipping_refiner.py` — Clippings quality scoring, tagging, quote extraction, and refinement cards.
 - `scripts/skill_detector.py` — scans Inbox for reusable Skill candidates; writes drafts to the Skills layer.

@@ -265,3 +265,30 @@ python scripts/link_suggester.py --similarity legacy   # 复现旧版打分
 ```
 
 两种后端都是本地计算；未来若接入 embedding 语义相似，将作为新增后端挂到同一 `--similarity` 开关，主流程不变。
+
+## 增量 checkpoint 与输入层分类（运行时数据）
+
+以下文件都是 **个人 Vault 私有的运行时数据**，已加入 `.gitignore`，不随 Skill 分发：
+
+| 文件 | 作用 | 产生者 |
+|---|---|---|
+| `<vault>/.kis_state.json` | 每个任务的增量 checkpoint（last_run + 已处理文件 mtime/hash） | kis_state.py |
+| `<vault>/catalog.json` | 输入层分类的**唯一数据源**（doc→分类/来源/hash） | kis_catalog.py |
+| `<vault>/.kis_pending_categories.json` | 待确认分类队列（落入其他 / LLM 提议新分类） | kis_catalog.py |
+| 蒸馏层 `输入层分类目录.md` | 从 catalog.json 渲染的双视图展示（勿手改） | kis_catalog.py |
+| `<vault>/taxonomy.json` | 用户声明的分类覆盖（可选，见上方 Taxonomy 章节） | kis_onboard.py / 手写 |
+
+### 增量语义
+
+- 默认：`daily_distill.py` / `weekly_review.py` 只处理自上次运行以来新增/内容变化的文件。
+- mtime 只做快筛，最终以内容 hash 定夺——对抗网盘同步刷新 mtime 的误判。
+- `--days N` / `--since YYYY-MM-DD`：手动时间窗，**不读写 checkpoint**。
+- `--reset-checkpoint`：清除本任务状态，下次全量视为增量。
+- 日报与周报使用**独立 task key**，互不干扰。
+
+### 分类行为
+
+- `daily_distill.py --classify=keyword|llm|off`（默认 keyword）。
+- 分类维度复用 `taxonomy.contentTypes` 的 key，不新造表；多标签；零命中→「其他」。
+- LLM 后端：opt-in、走 `kis_llm` 缓存、未配置/离线自动降级为关键词；**永远不自动写 taxonomy**，新分类需人工批准。
+- 分类失败不影响蒸馏主流程；疑难件进待审队列，由 agent 异步处理，脚本不阻塞。
