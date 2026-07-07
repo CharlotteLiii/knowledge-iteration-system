@@ -192,9 +192,11 @@ python3 scripts/setup_preflight.py --disable-task feedback_loop --disable-task s
 # 把每周复盘改到周一 15:00
 python3 scripts/setup_preflight.py --set-task-dow weekly_review=1 --set-task weekly_review=15:00
 
-# 看当前所有任务的时间
+# 看当前所有任务的时间（含「已安装」列，真实反映系统调度器状态）
 python3 scripts/setup_preflight.py --list-tasks
 ```
+
+> 注：“启用”（配置意图）不等于“已安装”（系统调度器里真的注册了）。`--list-tasks` 和 `📚 知识迭代系统说明.md` 都会去查 launchd/cron/Task Scheduler 的实际安装情况，未装会显示 ❌；需跑下方安装器才会自动跑。
 
 改完后重跑一次 `install_automation.*`，新时间就会生效（安装器会先 bootout 旧任务、再重建）。
 
