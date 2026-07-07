@@ -603,6 +603,94 @@ def ordered_task_items() -> List[Tuple[str, Dict[str, Any]]]:
     return result
 
 
+LAUNCHAGENT_LABEL_PREFIX = "com.knowledge-iteration"
+CRON_BEGIN_MARK = "# BEGIN knowledge-iteration-system"
+CRON_END_MARK = "# END knowledge-iteration-system"
+WINDOWS_TASK_PREFIX = "KnowledgeIteration_"
+
+
+def installed_task_keys() -> Optional[set]:
+    """探测系统调度器里**实际安装**了哪些任务（跨平台）。
+
+    区别于 `automation_tasks()` 的 `enabled` 字段（那只是配置意图）：
+    这里真去查本机调度器。
+
+    返回：
+    - 已安装任务 key 的集合（可能为空集，表示“一个都没装”）
+    - `None` 表示**无法可靠探测**（平台不支持或命令不可用），调用方应如实说“未知”。
+    """
+    import sys
+    plat = sys.platform
+    try:
+        if plat == "darwin":
+            return _installed_launchagents()
+        if plat.startswith("linux"):
+            return _installed_cron_tasks()
+        if plat.startswith("win"):
+            return _installed_windows_tasks()
+    except Exception:
+        return None
+    return None
+
+
+def _installed_launchagents() -> set:
+    la_dir = Path.home() / "Library" / "LaunchAgents"
+    found = set()
+    if not la_dir.is_dir():
+        return found
+    for p in la_dir.glob(f"{LAUNCHAGENT_LABEL_PREFIX}.*.plist"):
+        # com.knowledge-iteration.<task_key>.plist
+        stem = p.name[len(LAUNCHAGENT_LABEL_PREFIX) + 1 : -len(".plist")]
+        if stem:
+            found.add(stem)
+    return found
+
+
+def _installed_cron_tasks() -> Optional[set]:
+    import subprocess
+    try:
+        out = subprocess.run(["crontab", "-l"], capture_output=True, text=True, timeout=5)
+    except Exception:
+        return None
+    if out.returncode != 0:
+        return set()  # 没有 crontab 也算“一个都没装”
+    lines = out.stdout.splitlines()
+    inside = False
+    found = set()
+    for line in lines:
+        if line.strip() == CRON_BEGIN_MARK:
+            inside = True
+            continue
+        if line.strip() == CRON_END_MARK:
+            inside = False
+            continue
+        if inside:
+            for key in TASK_ORDER:
+                if f"{key}.py" in line:
+                    found.add(key)
+    return found
+
+
+def _installed_windows_tasks() -> Optional[set]:
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["schtasks", "/query", "/fo", "csv", "/nh"],
+            capture_output=True, text=True, timeout=8,
+        )
+    except Exception:
+        return None
+    if out.returncode != 0:
+        return None
+    found = set()
+    for line in out.stdout.splitlines():
+        if WINDOWS_TASK_PREFIX in line:
+            for key in TASK_ORDER:
+                if key in line:
+                    found.add(key)
+    return found
+
+
 def validate_task(key: str, task: Dict[str, Any]) -> List[str]:
     """Return a list of validation error messages for a task config. Empty = valid."""
     errors: List[str] = []
@@ -721,9 +809,29 @@ def render_system_intro(interval_days: Optional[int] = None) -> str:
         return out
 
     enabled_tasks = [(k, c) for k, c in _local_ordered() if c.get("enabled", True)]
-    if enabled_tasks:
-        automation_line = f"per-task 自动化表已启用 {len(enabled_tasks)} 个任务（详见下表），跑 `bash scripts/install_automation.sh` 安装成本机定时任务"
+    installed = installed_task_keys()  # 真去查系统调度器；None=无法探测
+    n_enabled = len(enabled_tasks)
+    if installed is None:
+        # 探测不了（平台不支持/命令不可用）→ 只陈述配置意图，不谎称已安装。
+        automation_line = (
+            f"配置表已启用 {n_enabled} 个任务（见下表）；无法自动检测本机是否已安装定时任务，"
+            f"请自行确认或跑 `bash scripts/install_automation.sh` 安装"
+        )
     else:
+        n_installed = len([k for k, _ in _local_ordered() if k in installed])
+        if n_installed == 0:
+            automation_line = (
+                f"配置表已启用 {n_enabled} 个任务，但**本机尚未安装任何定时任务**——"
+                f"需跑 `bash scripts/install_automation.sh`（或对应平台安装器）才会自动跑；否则请手动 `python3 scripts/run_all.py`"
+            )
+        elif n_installed < n_enabled:
+            automation_line = (
+                f"**已安装 {n_installed}/{n_enabled} 个定时任务**（部分）；已装的会自动跑，"
+                f"剩下的需重跑 `bash scripts/install_automation.sh` 补齐"
+            )
+        else:
+            automation_line = f"**已安装并启用 {n_installed} 个定时任务**（详见下表），会按表中时间自动运行"
+    if not enabled_tasks:
         automation_line = "所有自动化任务当前禁用（需手动跑 `python3 scripts/run_all.py`）"
 
     # Interval override 兼容 legacy：只影响 daily_distill 那一行的展示
@@ -780,7 +888,7 @@ def render_system_intro(interval_days: Optional[int] = None) -> str:
         "",
         "## 自动化已配置",
         "",
-        f"- 状态：**{automation_line}**",
+        f"- 状态：{automation_line}",
         f"- 每日蒸馏默认走**增量 checkpoint**（只处理自上次运行以来新增/变化的文档）；仅当手动传 `--days N` 时才按时间窗扫描（当前默认回退窗 **{scan_days}** 天）。",
         "- 安装入口：`bash scripts/install_automation.sh`（macOS 9 个 LaunchAgent）/ `install_automation.ps1`（Windows Task Scheduler）/ `install_automation_linux.sh`（Linux cron）",
         "- 查看/修改任务：`python3 scripts/setup_preflight.py --list-tasks` / `--set-task NAME=HH:MM` / `--enable-task NAME` / `--disable-task NAME` / `--ask-tasks`（交互向导）",
@@ -788,8 +896,8 @@ def render_system_intro(interval_days: Optional[int] = None) -> str:
         "",
         "### 当前任务表",
         "",
-        "| 任务 | 脚本 | 触发时间 | 启用 |",
-        "|------|------|----------|------|",
+        "| 任务 | 脚本 | 触发时间 | 启用 | 已安装 |",
+        "|------|------|----------|------|--------|",
     ]
     for key, cfg in _local_ordered():
         label = cfg.get("label", key)
@@ -797,7 +905,19 @@ def render_system_intro(interval_days: Optional[int] = None) -> str:
         when = _fmt_when(cfg)
         note = cfg.get("_legacy_interval_note", "")
         enabled = "✅" if cfg.get("enabled", True) else "⏸️"
-        lines.append(f"| {label} (`{key}`) | `scripts/{script}` | {when}{note} | {enabled} |")
+        if installed is None:
+            inst = "？"
+        elif key in installed:
+            inst = "✅"
+        else:
+            inst = "❌"
+        lines.append(f"| {label} (`{key}`) | `scripts/{script}` | {when}{note} | {enabled} | {inst} |")
+
+    lines.append("")
+    if installed is None:
+        lines.append("> 「已安装」列：？ = 本平台无法自动检测；请自行确认调度器状态。")
+    else:
+        lines.append("> 「已安装」列反映系统调度器（macOS launchd / Linux cron / Windows Task Scheduler）里的**实际**状态：✅=已装、❌=未装。启用≠已安装，未装需跑安装器。")
 
     lines.extend([
         "",

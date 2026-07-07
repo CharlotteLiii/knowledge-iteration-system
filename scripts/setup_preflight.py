@@ -20,6 +20,7 @@ from kis_config import (
     automation_interval_days,
     automation_tasks,
     create_missing_structure,
+    installed_task_keys,
     ordered_task_items,
     parse_hhmm,
     preflight,
@@ -63,13 +64,25 @@ def _describe_task(task: Dict[str, Any]) -> str:
 
 
 def print_task_table(tasks_iter=None) -> None:
-    tasks_iter = tasks_iter if tasks_iter is not None else ordered_task_items()
-    print("| 任务 | 触发时间 | 启用 |")
-    print("|------|----------|------|")
+    tasks_iter = list(tasks_iter) if tasks_iter is not None else ordered_task_items()
+    installed = installed_task_keys()  # 真去查调度器；None=无法探测
+    print("| 任务 | 触发时间 | 启用 | 已安装 |")
+    print("|------|----------|------|--------|")
     for key, task in tasks_iter:
         label = task.get("label", key)
         enabled = "✅" if task.get("enabled", True) else "⏸"
-        print(f"| {label} | {_describe_task(task)} | {enabled} |")
+        if installed is None:
+            inst = "？"
+        elif key in installed:
+            inst = "✅"
+        else:
+            inst = "❌"
+        print(f"| {label} | {_describe_task(task)} | {enabled} | {inst} |")
+    if installed is None:
+        print("\n？ = 本平台无法自动检测安装状态。")
+    else:
+        n_inst = sum(1 for k, _ in tasks_iter if k in installed)
+        print(f"\n已安装 {n_inst} 个到系统调度器（启用≠已安装；❌ 需跑 install_automation 安装器）。")
 
 
 def ask_yes_no(prompt: str, default: bool = True) -> bool:
