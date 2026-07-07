@@ -887,7 +887,7 @@ def scan_candidates(min_score: int = 3) -> List[Dict[str, Any]]:
 
 
 def process_candidates(llm_mode: str = "off") -> Tuple[List[Dict[str, Any]], Path]:
-    """主处理流程：扫描 → 正则诊断 → LLM 兜底 → 生成 EVAL 卡 → 生成 README。
+    """主处理流程：扫描 → 正则诊断 → LLM 兜底 → 生成 EVAL 卡 → 生成 Skill 可行性评估索引。
 
     llm_mode:
       - "off" ：不调用任何 LLM
@@ -1003,10 +1003,18 @@ def process_candidates(llm_mode: str = "off") -> Tuple[List[Dict[str, Any]], Pat
             cards_written += 1
     print(f"   EVAL 卡：写入 {cards_written} 张（变化/新增），跳过 {len(evals) - cards_written} 张未变化")
 
-    # 生成 README（全量，需所有 evals 做排名）
+    # 生成索引（全量，需所有 evals 做排名）。文件名固定为「Skill 可行性评估索引」。
     readme = generate_readme(evals)
-    readme_path = OUTPUT / "README.md"
+    readme_path = OUTPUT / "Skill 可行性评估索引.md"
     readme_path.write_text(readme, encoding="utf-8")
+
+    # 迁移：清掉历史遗留的旧文件名 README.md，避免与新索引并存。
+    legacy = OUTPUT / "README.md"
+    if legacy.exists():
+        try:
+            legacy.unlink()
+        except Exception:
+            pass
 
     return evals, OUTPUT
 

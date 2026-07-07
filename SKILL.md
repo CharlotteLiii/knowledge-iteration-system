@@ -139,7 +139,7 @@ See `references/config-schema.md` and `templates/setup-preflight-report.md`.
 | weekly_review 每周复盘 | 增量 | checkpoint（独立 key） |
 | 输入层分类目录 | 增量更新 + 全量存储 | 只分类增量文档，catalog.json 累积全量，带失效条目对账清理 |
 | clipping_refiner 提炼 | 混合 | 总览报告全量（全局排名），逐篇卡增量 |
-| skill_detector 检测 | 混合 | content-hash 缓存跳过 LLM 重算，EVAL 卡增量，README 全量 |
+| skill_detector 检测 | 混合 | content-hash 缓存跳过 LLM 重算，EVAL 卡增量，索引全量 |
 | idea_tracker 想法追踪 | 全量 | 重算全部想法成熟度（快照） |
 | link_suggester 链接 | 全量 | 全局关联网必须全量重算 |
 | feedback_loop 回流 | 全量 | 全量已发表内容（快照） |
@@ -174,7 +174,7 @@ python scripts/setup_preflight.py --create-missing
 - `scripts/kis_onboard.py` — non-blocking taxonomy onboarding (`--status/--template/--validate/--write`); agent runs the guided Q&A, script only validates + writes `taxonomy.json`.
 - `scripts/idea_tracker.py` — idea maturity tracking; scans the entire `ideas` root recursively (incl. subfolders).
 - `scripts/clipping_refiner.py` — Clippings quality scoring, tagging, quote extraction. Overview report is full-scan (global ranking/stats); per-clipping refinement cards (`提炼_*.md`) are written incrementally (only changed/new, self-heals missing cards; `--reset-cards` clears the card checkpoint).
-- `scripts/skill_detector.py` — scans Inbox for reusable Skill candidates; writes drafts to the Skills layer. Uses a stable content-hash cache (s1/s2/s3) so unchanged candidates skip LLM re-evaluation; EVAL cards are written only when content changes; README is full-scan.
+- `scripts/skill_detector.py` — scans Inbox for reusable Skill candidates; writes drafts to the Skills layer. Uses a stable content-hash cache (s1/s2/s3) so unchanged candidates skip LLM re-evaluation; EVAL cards are written only when content changes; the index (Skill 可行性评估索引.md) is full-scan.
 - `scripts/link_suggester.py` — generates checkbox-based structural link suggestions between high-scoring Clippings and ideas; themes/bridge rules come from the taxonomy config; keyword similarity uses a pluggable backend (`--similarity tfidf|legacy`, default TF-IDF, fully local); `--apply-approved` writes back only checked suggestions.
 - `scripts/skill_upgrader.py` — **[Phase 3]** 读取 `技能层/待整理/EVAL_*.md`，根据 Skill 成熟度模型 Level 0-5 生成升级路线图，产物落 `技能层/Skill 升级路线图.md`。支持 `--min-yes N` 过滤、`--dry-run` 预览。
 - `scripts/feedback_loop.py` — **[Phase 3 实现]** 扫描 `输出层/已发表`，本地统计（平台/月度/高频词）+ 可选 LLM 抽样总结（默认关闭），产出 `蒸馏层/输出回流分析.md` + `蒸馏层/输出回流建议.md`。支持 `--llm=<off|auto|api>`、`--sample N`、`--dry-run`。**不直接写 Skills 层**，回流建议供人工勾选后手动搬运。
