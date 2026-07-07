@@ -99,7 +99,7 @@ See `references/config-schema.md` and `templates/setup-preflight-report.md`.
 汇总一周趋势、主题聚类、最有潜力想法、下周方向。默认也走增量 checkpoint（独立于日报）。模板见 `templates/weekly-review-report.md`。
 
 ### 想法追踪
-评估想法成熟度：🌱种子 → 🌿发芽 → 🌳成熟 → ✅已落地。补充判断：继续投入价值（高/中/低）。模板见 `templates/idea-maturity-report.md`。
+评估想法成熟度：🌱种子 → 🌿发芽 → 🌳成熟 → ✅已落地。补充判断：继续投入价值（高/中/低）。读取 `ideas` 根（`第一层：输入层 (Inbox)/想法`）下的**整棵树，递归包括子目录**（与 daily/weekly 口径一致）。模板见 `templates/idea-maturity-report.md`。
 
 ### Clipping 提炼
 对外部内容打分（0-10）、提炼金句、打标签、去重、判断转化价值。模板见 `templates/clipping-refine-report.md`。
@@ -155,7 +155,7 @@ python scripts/setup_preflight.py --create-missing
 - `scripts/kis_classifier.py` — pluggable multi-label input classifier reusing taxonomy `contentTypes` keys; KeywordClassifier (default, offline) + LLMClassifier (opt-in, cached, auto-degrades); zero-hit falls back to 其他.
 - `scripts/kis_catalog.py` — `catalog.json` source of truth + renders `输入层分类目录.md` (by-category / by-document views) + pending queue for async human triage.
 - `scripts/kis_onboard.py` — non-blocking taxonomy onboarding (`--status/--template/--validate/--write`); agent runs the guided Q&A, script only validates + writes `taxonomy.json`.
-- `scripts/idea_tracker.py` — idea maturity tracking.
+- `scripts/idea_tracker.py` — idea maturity tracking; scans the entire `ideas` root recursively (incl. subfolders).
 - `scripts/clipping_refiner.py` — Clippings quality scoring, tagging, quote extraction, and refinement cards.
 - `scripts/skill_detector.py` — scans Inbox for reusable Skill candidates; writes drafts to the Skills layer.
 - `scripts/link_suggester.py` — generates checkbox-based structural link suggestions between high-scoring Clippings and ideas; themes/bridge rules come from the taxonomy config; keyword similarity uses a pluggable backend (`--similarity tfidf|legacy`, default TF-IDF, fully local); `--apply-approved` writes back only checked suggestions.

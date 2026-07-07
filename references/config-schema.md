@@ -30,7 +30,7 @@
     "output": "第四层：输出层 (Output)"
   },
   "subfolders": {
-    "ideas": "第一层：输入层 (Inbox)/想法/灵感集",
+    "ideas": "第一层：输入层 (Inbox)/想法",
     "clippings": "第一层：输入层 (Inbox)/Clippings",
     "dailyDistill": "第二层：蒸馏层 (Distilled)/每日蒸馏",
     "weeklyReview": "第二层：蒸馏层 (Distilled)/每周复盘",
@@ -160,7 +160,7 @@ else:
 
 | Key | 角色 | 标准相对路径 |
 |---|---|---|
-| `ideas` | 想法/灵感输入 | `第一层：输入层 (Inbox)/想法/灵感集` |
+| `ideas` | 想法/灵感输入（递归扫描，含子目录） | `第一层：输入层 (Inbox)/想法` |
 | `clippings` | 外部抓取输入 | `第一层：输入层 (Inbox)/Clippings` |
 | `dailyDistill` | 每日蒸馏报告 | `第二层：蒸馏层 (Distilled)/每日蒸馏` |
 | `weeklyReview` | 每周复盘报告 | `第二层：蒸馏层 (Distilled)/每周复盘` |
@@ -285,6 +285,7 @@ python scripts/link_suggester.py --similarity legacy   # 复现旧版打分
 - `--days N` / `--since YYYY-MM-DD`：手动时间窗，**不读写 checkpoint**。
 - `--reset-checkpoint`：清除本任务状态，下次全量视为增量。
 - 日报与周报使用**独立 task key**，互不干扰。
+- **想法扫描根**：`subfolders.ideas` 指向 `第一层：输入层 (Inbox)/想法` 根目录，**递归扫描所有子目录**（如 `想法/灵感集/`）。daily_distill / weekly_review / idea_tracker 三者均递归，口径一致。若把 `ideas` 配成某个子目录，其他兄弟子目录的想法会被漏扫。
 
 ### 分类行为
 

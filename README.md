@@ -18,6 +18,9 @@
 ## ✨ 特性
 
 - 🤖 **可选 LLM 兜底**：默认关闭，自己声明任意 OpenAI 兼容供应商就自动上（OpenAI / DeepSeek / 智谱 GLM / 通义 / 火山方舟 / 自搭建都行）
+- ⏩ **增量 checkpoint**：每日蒸馏 / 每周复盘默认只处理「自上次运行以来新增或改动」的文档；mtime 快筛 + 内容 hash 兜底，云盘刷新时间戳也不会重复处理
+- 🗂 **输入层自动分类目录**：给每篇输入内容打多标签（复用你的 taxonomy 分类），生成「按分类看 / 按文档看」双视图目录；关键词零命中归「其他」并进待审队列
+- 🧭 **Taxonomy onboarding**：首次使用可声明你自己领域的分类（不声明也能用通用默认）
 - 🌍 **三平台自动化**：macOS LaunchAgent / Linux cron / Windows Task Scheduler，一键安装
 - 🔒 **隐私优先**：所有分析本地跑，只有明确配置了才调外部 API
 - 📊 **9 步全量流水线**：`run_all.py` 一条命令跑完所有蒸馏
@@ -76,6 +79,55 @@ python3 scripts/run_all.py
 [8/9] feedback_loop      输出反馈回流
 [9/9] quarterly_audit    季度资产审计
 ```
+
+## ⏩ 增量扫描与输入层分类
+
+### 增量 checkpoint（默认）
+
+`daily_distill` / `weekly_review` 默认只处理**自上次运行以来新增或内容变化**的文档，状态存在 `<vault>/.kis_state.json`（日报与周报各自独立 key）。
+
+- 判据：mtime 快筛 + 内容 hash 兑底 —— 云盘同步刷新 mtime **不会**把未改内容的文件误当新增。
+- 漏跑自动补扫；连跑不重叠（报告成功后才推进 checkpoint）。
+
+```bash
+# 默认：自上次以来的增量
+python3 scripts/daily_distill.py
+
+# 手动覆盖（不读写 checkpoint）
+python3 scripts/daily_distill.py --days 7            # 最近 7 天
+python3 scripts/daily_distill.py --since 2026-07-01  # 指定日期起
+
+# 清除本任务 checkpoint（下次全量视为增量）
+python3 scripts/daily_distill.py --reset-checkpoint
+```
+
+> 想法扫描根为`第一层：输入层 (Inbox)/想法`，**递归包括所有子目录**（如 `想法/灵感集/`）。daily / weekly / idea_tracker 三者口径一致。
+
+### 输入层分类目录
+
+每日蒸馏时会对增量文档做**多标签分类**（一篇可属多个分类，复用你的 taxonomy 分类 key），并渲染出蒸馏层的 `输入层分类目录.md`（按分类看 / 按文档看 双视图）。
+
+```bash
+python3 scripts/daily_distill.py --classify keyword  # 默认，离线关键词
+python3 scripts/daily_distill.py --classify llm      # opt-in，LLM 语义分类（无网/未配置自动降级）
+python3 scripts/daily_distill.py --classify off      # 不分类
+```
+
+- 关键词零命中 → 归「其他」，并写入待审队列 `.kis_pending_categories.json`，由你事后异步处理 —— **脚本不会卡住问你**。
+- LLM 后端只能**提议**新分类（写队列），无权直接改 taxonomy。
+
+### 声明你自己的分类（onboarding）
+
+首次使用无 `taxonomy.json` 时，系统用通用默认分类；你可以声明自己领域的分类：
+
+```bash
+python3 scripts/kis_onboard.py --status     # 看当前生效的分类
+python3 scripts/kis_onboard.py --template   # 拿一份可填写的模板
+# 把填好的 JSON 写入 taxonomy.json（与默认深合并）
+python3 scripts/kis_onboard.py --write --file my_cats.json
+```
+
+不声明也能正常使用；声明后下次分类/链接/蒸馏自动生效。
 
 ## 📅 定时自动化（可选，v0.2+ per-task 调度）
 
@@ -163,14 +215,19 @@ Your Vault/
 ├── scripts/                          ← 从本仓库复制
 ├── .env                              ← 你的 LLM 配置（.gitignore 已排）
 ├── .knowledge-iteration-system.json  ← 系统配置
+├── taxonomy.json                     ← （可选）你自定义的分类，不建就用通用默认
+├── catalog.json                      ← 输入层分类数据源（自动生成，.gitignore 已排）
+├── .kis_state.json                   ← 增量 checkpoint 状态（自动生成，.gitignore 已排）
+├── .kis_pending_categories.json      ← 待确认分类队列（自动生成，.gitignore 已排）
 ├── 📚 知识迭代系统说明.md            ← 首页文档
 ├── 第一层：输入层 (Inbox)/
-│   ├── 想法/灵感集/
+│   ├── 想法/                          ← 想法根目录，递归扫描包括子目录（如 想法/灵感集/）
 │   └── Clippings/
 ├── 第二层：蒸馏层 (Distilled)/
 │   ├── 每日蒸馏/                    ← daily_distill.py
 │   ├── 每周复盘/                    ← weekly_review.py
 │   ├── 想法追踪/                    ← idea_tracker.py
+│   ├── 输入层分类目录.md            ← kis_catalog.py（分类双视图）
 │   ├── Clippings提炼/               ← clipping_refiner.py
 │   ├── 结构性链接建议/              ← link_suggester.py
 │   ├── 输出回流分析.md              ← feedback_loop.py
@@ -249,7 +306,7 @@ prompt 里已经明确要求 JSON，脚本仍能正常解析。
 ## 🛠 常见问题
 
 **Q：不配 LLM 能跑吗？**
-A：能。`skill_detector` 会退化到纯正则模式，其他 8 个脚本本来就不需要 LLM。
+A：能。默认全部离线：`skill_detector` 退化到纯正则，输入层分类退化到关键词，其余脚本本来就不需要 LLM。仅当你显式开启（`--llm=auto|api` 或 `--classify llm`）时才会调外部 API。
 
 **Q：跑一次要多久？**
 A：不用 LLM 通常 < 30 秒；用 LLM 且候选 ≥ 30 篇时约 10-15 分钟（受 API 速率限制）。
