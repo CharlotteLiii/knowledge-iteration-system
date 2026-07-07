@@ -131,7 +131,7 @@ python3 scripts/kis_onboard.py --write --file my_cats.json
 
 ## 📅 定时自动化（可选，v0.2+ per-task 调度）
 
-从 v0.2 开始，自动化不再只处理“每日蒸馏”，而是为 **8 个任务**分别注册独立调度。默认时间：
+从 v0.2 开始，自动化不再只处理“每日蒸馏”，而是为 **9 个任务**分别注册独立调度。默认时间：
 
 | 任务 | 默认触发时间 |
 |------|-------------|
@@ -140,7 +140,8 @@ python3 scripts/kis_onboard.py --write --file my_cats.json
 | Clippings 提炼 `clipping_refiner` | 每天 21:10 |
 | Skill 候选检测 `skill_detector` | 每天 21:15 |
 | 结构性链接建议 `link_suggester` | 每天 21:20 |
-| 输出反馈回流 `feedback_loop` | 每天 21:25 |
+| Skill 升级路线图 `skill_upgrader` | 每天 21:25 |
+| 输出反馈回流 `feedback_loop` | 每天 21:30 |
 | 每周知识复盘 `weekly_review` | 每周日 14:00 |
 | 季度知识健康审计 `quarterly_audit` | 季度最后一天 12:00 |
 
@@ -276,6 +277,7 @@ prompt 里已经明确要求 JSON，脚本仍能正常解析。
 ### LLM 用途：
 - `skill_detector` 里 Section 2（服务谁·用在哪·达到什么效果）和 Section 3（Skill 形态）**全走 AI 分析**
 - `feedback_loop` 抽样总结发布内容特点（可关，默认关）
+- `daily_distill --classify=llm` 输入层语义分类（默认走关键词，不走 LLM；无网/未配置自动降级）
 
 **隐私边界**：
 - 只有你明确调 `--llm=auto|api` 才会走 API

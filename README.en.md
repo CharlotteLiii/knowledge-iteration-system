@@ -129,13 +129,28 @@ python3 scripts/kis_onboard.py --write --file my_cats.json
 
 Works fine without declaring; once declared it takes effect on the next classify / link / distill run.
 
-## 📅 Scheduled automation (optional)
+## 📅 Scheduled automation (optional, v0.2+ per-task)
+
+Since v0.2 automation registers **9 independent tasks** (not just daily distillation), each with its own schedule. Defaults:
+
+| Task | Default time |
+|------|-------------|
+| Daily distillation `daily_distill` | daily 21:00 |
+| Idea maturity tracking `idea_tracker` | daily 21:05 |
+| Clippings refinement `clipping_refiner` | daily 21:10 |
+| Skill candidate detection `skill_detector` | daily 21:15 |
+| Structural link suggestions `link_suggester` | daily 21:20 |
+| Skill upgrade roadmap `skill_upgrader` | daily 21:25 |
+| Output feedback loop `feedback_loop` | daily 21:30 |
+| Weekly review `weekly_review` | Sunday 14:00 |
+| Quarterly health audit `quarterly_audit` | last day of quarter 12:00 |
+
+Inspect / edit tasks: `python3 scripts/setup_preflight.py --list-tasks` / `--set-task NAME=HH:MM` / `--enable-task NAME` / `--disable-task NAME` / `--ask-tasks` (interactive). Then re-run the installer for your platform.
 
 ### macOS
 
 ```bash
-bash scripts/install_automation.sh                # run daily at 10:00
-bash scripts/install_automation.sh --interval 3   # run every 3 days
+bash scripts/install_automation.sh                # install 9 LaunchAgents at their scheduled times
 bash scripts/install_automation.sh --dry-run      # preview only
 bash scripts/install_automation.sh --uninstall    # uninstall
 ```
@@ -150,12 +165,11 @@ bash scripts/install_automation_linux.sh
 
 ```powershell
 .\scripts\install_automation.ps1
-.\scripts\install_automation.ps1 -Interval 3
 .\scripts\install_automation.ps1 -DryRun
 .\scripts\install_automation.ps1 -Uninstall
 ```
 
-To change the automation cadence: edit `automation.dailyIntervalDays` in `.knowledge-iteration-system.json`, then re-run the install script.
+Legacy `--set-daily-interval N` / `automation.dailyIntervalDays` still work (they only affect the daily_distill cadence display), but prefer the per-task interface for new installs.
 
 ## 🗂 Directory layout
 
@@ -227,6 +241,7 @@ The prompts still explicitly ask for JSON and the scripts parse the response fin
 ### Where the LLM is used:
 - `skill_detector` — Section 2 (who / where / expected outcome) and Section 3 (Skill form factor) go **fully through AI analysis**
 - `feedback_loop` — samples published content for pattern summaries (togglable, off by default)
+- `daily_distill --classify=llm` — semantic input-layer classification (defaults to keyword, not LLM; auto-degrades when offline/unconfigured)
 
 **Privacy boundary:**
 - The API is only called when you explicitly run with `--llm=auto|api`
