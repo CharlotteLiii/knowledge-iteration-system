@@ -131,7 +131,7 @@ python3 scripts/kis_onboard.py --write --file my_cats.json
 
 ## 📅 定时自动化（可选，v0.2+ per-task 调度）
 
-从 v0.2 开始，自动化不再只处理“每日蒸馏”，而是为 **8 个任务**分别注册独立调度。默认时间：
+从 v0.2 开始，自动化不再只处理“每日蒸馏”，而是为 **9 个任务**分别注册独立调度。默认时间：
 
 | 任务 | 默认触发时间 |
 |------|-------------|
@@ -140,7 +140,8 @@ python3 scripts/kis_onboard.py --write --file my_cats.json
 | Clippings 提炼 `clipping_refiner` | 每天 21:10 |
 | Skill 候选检测 `skill_detector` | 每天 21:15 |
 | 结构性链接建议 `link_suggester` | 每天 21:20 |
-| 输出反馈回流 `feedback_loop` | 每天 21:25 |
+| Skill 升级路线图 `skill_upgrader` | 每天 21:25 |
+| 输出反馈回流 `feedback_loop` | 每天 21:30 |
 | 每周知识复盘 `weekly_review` | 每周日 14:00 |
 | 季度知识健康审计 `quarterly_audit` | 季度最后一天 12:00 |
 
