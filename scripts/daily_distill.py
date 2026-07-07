@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 from collections import Counter
 from datetime import datetime, timedelta
@@ -11,6 +12,8 @@ from typing import Dict, Iterable, List, Tuple
 
 from kis_config import iter_markdown_files, is_stopword, subfolder_path
 import kis_state
+import kis_catalog
+from kis_classifier import build_classifier, OTHER
 
 TASK_KEY = "daily_distill"
 
@@ -310,12 +313,48 @@ def generate_distill_report(files: List[Dict[str, object]], target_date: str | N
     return output_file
 
 
+def classify_input_docs(files: List[Dict[str, object]], mode: str = "keyword") -> Dict[str, int]:
+    """对本次增量文档做多标签分类，写入 catalog，疑难件进待审队列。
+
+    非阻塞：不在这里问用户；落入 OTHER 或 LLM 提议新分类的，只写队列，人事后处理。
+    返回统计：{'classified':N,'other':M,'proposed':K}。
+    """
+    classifier = build_classifier(mode)
+    catalog = kis_catalog.load_catalog()
+    pending = kis_catalog.load_pending()
+    stats = {"classified": 0, "other": 0, "proposed": 0}
+
+    for item in files:
+        path = item["path"]
+        name = str(item["name"])
+        content = str(item.get("content", ""))
+        content_hash = hashlib.md5(content.encode("utf-8", errors="ignore")).hexdigest()
+        result = classifier.classify(name, content)
+        kis_catalog.upsert_doc(catalog, path, name, result.categories, result.source, content_hash)
+        stats["classified"] += 1
+        if result.fell_back_to_other:
+            stats["other"] += 1
+            kis_catalog.queue_pending(pending, path, name, "no_match", result.proposals)
+        elif result.proposals:
+            stats["proposed"] += 1
+            kis_catalog.queue_pending(pending, path, name, "llm_proposal", result.proposals)
+
+    kis_catalog.save_catalog(catalog)
+    kis_catalog.save_pending(pending)
+    doc = kis_catalog.render_catalog_doc(catalog)
+    print(f"🗂 分类目录已更新：{doc}")
+    print(f"   分类 {stats['classified']} 篇，其中落入「{OTHER}」 {stats['other']} 篇，待审队列新增 {stats['other'] + stats['proposed']} 条")
+    return stats
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="每日知识蒸馏")
     parser.add_argument("days_pos", nargs="?", type=int, help="兼容旧用法：扫描天数（手动覆盖，不读写 checkpoint）")
     parser.add_argument("--days", type=int, help="手动覆盖：扫描最近 N 天（不读写 checkpoint）")
     parser.add_argument("--since", type=str, help="手动覆盖：扫描自指定日期起（YYYY-MM-DD，不读写 checkpoint）")
     parser.add_argument("--reset-checkpoint", action="store_true", help="清除本任务 checkpoint 后退出（下次将全量视为增量）。")
+    parser.add_argument("--classify", choices=["keyword", "llm", "off"], default="keyword",
+                        help="输入层分类后端：keyword（默认、离线）/ llm（opt-in、降级安全）/ off（不分类）。")
     args = parser.parse_args()
 
     print("=" * 50)
@@ -359,6 +398,14 @@ def main() -> None:
     print("\n📝 生成蒸馏报告...")
     output_file = generate_distill_report(files)
     print(f"✅ 报告已生成：{output_file}")
+
+    # 输入层分类目录（非阻塞；默认关键词离线，llm 需 opt-in 且降级安全）。
+    if args.classify != "off":
+        try:
+            classify_input_docs(files, mode=args.classify)
+        except Exception as exc:
+            # 分类失败不影响蒸馏主流程。
+            print(f"⚠️ 分类环节跳过（不影响蒸馏）：{exc}")
 
     # 报告成功产出后才推进 checkpoint，避免失败丢增量。
     if scan is not None:
