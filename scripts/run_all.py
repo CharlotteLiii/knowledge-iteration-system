@@ -15,7 +15,7 @@ from kis_config import CONFIG_PATH, VAULT, layer_path, preflight, print_prefligh
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 SCRIPTS = [
-    ("daily_distill.py", "每日知识蒸馏", lambda args: ["--days", str(args.days)]),
+    ("daily_distill.py", "每日知识蒸馏", lambda args: (["--days", str(args.days)] if args.days is not None else [])),
     ("weekly_review.py", "每周知识复盘", lambda args: []),
     ("idea_tracker.py", "想法成熟度追踪", lambda args: []),
     ("clipping_refiner.py", "Clippings 内容提炼", lambda args: []),
@@ -47,7 +47,8 @@ SCRIPT_ALIASES = {
 
 def script_extra_args(script_name: str, args: argparse.Namespace) -> list[str]:
     if script_name == "daily_distill.py":
-        return ["--days", str(args.days)]
+        # 默认走 checkpoint 增量（不传 --days）；仅当用户显式指定 --days 时覆盖。
+        return ["--days", str(args.days)] if args.days is not None else []
     if script_name == "setup_preflight.py" and args.create_missing:
         return ["--create-missing"]
     return []
@@ -76,7 +77,7 @@ def main():
     parser.add_argument("--preflight", action="store_true", help="先展示四层结构预检报告")
     parser.add_argument("--create-missing", action="store_true", help="配合 --only preflight/setup 创建缺失目录")
     parser.add_argument("--only", type=str, choices=list(SCRIPT_ALIASES.keys()), help="仅运行指定工作流")
-    parser.add_argument("--days", type=int, default=2, help="每日蒸馏扫描天数 (默认: 2)")
+    parser.add_argument("--days", type=int, default=None, help="每日蒸馏手动指定扫描天数（默认不传，走 checkpoint 增量）")
     args = parser.parse_args()
 
     print("=" * 50, flush=True)
@@ -84,6 +85,15 @@ def main():
     print(f"  Vault: {VAULT}", flush=True)
     print(f"  Config: {CONFIG_PATH if CONFIG_PATH.exists() else '未找到，使用默认四层结构'}", flush=True)
     print("=" * 50, flush=True)
+
+    # 非阻塞 onboarding 提示：首次使用（无 taxonomy.json）时告知可声明自定义分类。
+    try:
+        from kis_config import TAXONOMY_USER_PATH
+        if not TAXONOMY_USER_PATH.exists():
+            print("\n🧭 首次使用提示：当前使用通用默认分类。如需按自己的领域定制分类，", flush=True)
+            print("   运行：python scripts/kis_onboard.py --template（不声明也能正常使用）。", flush=True)
+    except Exception:
+        pass
 
     result = preflight()
     if args.preflight:
