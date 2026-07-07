@@ -92,7 +92,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "daily_distill": {
                 "label": "每日知识蒸馏",
                 "script": "daily_distill.py",
-                "args": ["--days", "2"],
+                "args": [],
                 "schedule": "daily",
                 "hour": 21,
                 "minute": 0,

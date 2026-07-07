@@ -19,6 +19,9 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
 from kis_config import iter_markdown_files, is_stopword, subfolder_path
+import kis_state
+
+TASK_KEY = "weekly_review"
 
 INPUT_IDEAS = subfolder_path("ideas")
 INPUT_CLIPPINGS = subfolder_path("clippings")
@@ -66,7 +69,20 @@ THEME_RULES: Dict[str, Dict[str, object]] = {
 }
 
 
+def _build_entry(fpath: Path) -> Dict[str, object]:
+    mtime = datetime.fromtimestamp(fpath.stat().st_mtime)
+    category = "想法" if INPUT_IDEAS in fpath.parents or fpath.parent == INPUT_IDEAS else "Clippings"
+    return {
+        "path": fpath,
+        "name": fpath.stem,
+        "mtime": mtime,
+        "category": category,
+        "text": safe_read(fpath),
+    }
+
+
 def scan_all_files(days_back: int = 7) -> List[Dict[str, object]]:
+    """时间窗模式：扫描最近 days_back 天（手动覆盖用）。"""
     cutoff = datetime.now() - timedelta(days=days_back)
     files: List[Dict[str, object]] = []
     for base in [INPUT_IDEAS, INPUT_CLIPPINGS]:
@@ -76,16 +92,16 @@ def scan_all_files(days_back: int = 7) -> List[Dict[str, object]]:
             mtime = datetime.fromtimestamp(fpath.stat().st_mtime)
             if mtime < cutoff:
                 continue
-            category = "想法" if INPUT_IDEAS in fpath.parents or fpath.parent == INPUT_IDEAS else "Clippings"
-            text = safe_read(fpath)
-            files.append({
-                "path": fpath,
-                "name": fpath.stem,
-                "mtime": mtime,
-                "category": category,
-                "text": text,
-            })
+            files.append(_build_entry(fpath))
     return sorted(files, key=lambda x: x["mtime"], reverse=True)
+
+
+def scan_incremental_files() -> Tuple[List[Dict[str, object]], "kis_state.IncrementalScan"]:
+    """Checkpoint 模式（默认）：自上次周报以来的新增/变化。独立于日报 checkpoint。"""
+    scan = kis_state.scan_incremental(TASK_KEY, [INPUT_IDEAS, INPUT_CLIPPINGS], recursive=True)
+    files = [_build_entry(p) for p in scan.files if p.exists()]
+    files.sort(key=lambda x: x["mtime"], reverse=True)
+    return files, scan
 
 
 def safe_read(path: Path, max_chars: int = 12000) -> str:
@@ -200,8 +216,7 @@ def build_human_interpretation(files: List[Dict[str, object]], thoughts: List[Di
     ]
 
 
-def generate_weekly_report(days_back: int = 7) -> Tuple[Path, int]:
-    files = scan_all_files(days_back)
+def generate_weekly_report(files: List[Dict[str, object]]) -> Tuple[Path, int]:
     thoughts = [f for f in files if f["category"] == "想法"]
     clippings = [f for f in files if f["category"] == "Clippings"]
     keywords = extract_keywords(files)
@@ -300,10 +315,50 @@ def generate_weekly_report(days_back: int = 7) -> Tuple[Path, int]:
     return output_file, len(files)
 
 
-if __name__ == "__main__":
+def main() -> None:
+    import argparse
+    parser = argparse.ArgumentParser(description="每周知识复盘")
+    parser.add_argument("--days", type=int, help="手动覆盖：扫描最近 N 天（不读写 checkpoint）")
+    parser.add_argument("--since", type=str, help="手动覆盖：扫描自指定日期起（YYYY-MM-DD，不读写 checkpoint）")
+    parser.add_argument("--reset-checkpoint", action="store_true", help="清除本任务 checkpoint 后退出。")
+    args = parser.parse_args()
+
     print("=" * 40)
     print("📊 每周知识复盘")
     print("=" * 40)
-    output, count = generate_weekly_report()
+
+    if args.reset_checkpoint:
+        removed = kis_state.reset_task(TASK_KEY)
+        print(f"{'✅ 已清除' if removed else 'ℹ️ 无'} checkpoint（任务：{TASK_KEY}）")
+        return
+
+    scan = None
+    if args.since:
+        try:
+            since_dt = datetime.strptime(args.since, "%Y-%m-%d")
+        except ValueError:
+            print(f"⚠️ --since 日期格式错误（需 YYYY-MM-DD）：{args.since}")
+            return
+        cutoff_days = max(1, (datetime.now() - since_dt).days + 1)
+        print(f"📂 [手动] 扫描 {args.since} 起新增内容（不更新 checkpoint）...")
+        files = scan_all_files(cutoff_days)
+    elif args.days is not None:
+        print(f"📂 [手动] 扫描最近 {args.days} 天（不更新 checkpoint）...")
+        files = scan_all_files(args.days)
+    else:
+        files, scan = scan_incremental_files()
+        if scan.last_run_at:
+            print(f"📂 [增量] 自上次复盘（{scan.last_run_at}）以来新增/变化的内容...")
+        else:
+            print("📂 [增量] 首次复盘，把当前输入层全部视为新增...")
+
+    output, count = generate_weekly_report(files)
     print(f"✅ 报告已生成，扫描了 {count} 篇笔记")
     print(f"   位置：{output}")
+
+    if scan is not None:
+        kis_state.commit_scan(TASK_KEY, scan)
+
+
+if __name__ == "__main__":
+    main()

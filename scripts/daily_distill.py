@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
 from kis_config import iter_markdown_files, is_stopword, subfolder_path
+import kis_state
+
+TASK_KEY = "daily_distill"
 
 IDEAS_PATH = subfolder_path("ideas")
 CLIPPINGS_PATH = subfolder_path("clippings")
@@ -95,7 +98,22 @@ def clean_text(content: str) -> str:
     return content.strip()
 
 
+def _build_file_entry(fpath: Path) -> Dict[str, object]:
+    mtime = datetime.fromtimestamp(fpath.stat().st_mtime)
+    category = "想法" if IDEAS_PATH in fpath.parents or fpath.parent == IDEAS_PATH else "Clippings"
+    content = safe_read(fpath)
+    return {
+        "path": fpath,
+        "name": fpath.stem,
+        "mtime": mtime,
+        "category": category,
+        "content": content,
+        "clean": clean_text(content),
+    }
+
+
 def get_today_files(days_back: int = 1) -> List[Dict[str, object]]:
+    """时间窗模式：扫描最近 days_back 天内 mtime 落入窗口的文件（手动覆盖用）。"""
     cutoff = datetime.now() - timedelta(days=days_back)
     files: List[Dict[str, object]] = []
     for base_path in SCAN_PATHS:
@@ -105,17 +123,33 @@ def get_today_files(days_back: int = 1) -> List[Dict[str, object]]:
             mtime = datetime.fromtimestamp(fpath.stat().st_mtime)
             if mtime < cutoff:
                 continue
-            category = "想法" if IDEAS_PATH in fpath.parents or fpath.parent == IDEAS_PATH else "Clippings"
-            content = safe_read(fpath)
-            files.append({
-                "path": fpath,
-                "name": fpath.stem,
-                "mtime": mtime,
-                "category": category,
-                "content": content,
-                "clean": clean_text(content),
-            })
+            files.append(_build_file_entry(fpath))
     return sorted(files, key=lambda x: x["mtime"], reverse=True)
+
+
+def get_files_since(since: datetime) -> List[Dict[str, object]]:
+    """时间窗模式：扫描 mtime >= since 的文件（--since 手动覆盖用）。"""
+    files: List[Dict[str, object]] = []
+    for base_path in SCAN_PATHS:
+        if not base_path.exists():
+            continue
+        for fpath in iter_markdown_files(base_path):
+            mtime = datetime.fromtimestamp(fpath.stat().st_mtime)
+            if mtime < since:
+                continue
+            files.append(_build_file_entry(fpath))
+    return sorted(files, key=lambda x: x["mtime"], reverse=True)
+
+
+def get_incremental_files() -> Tuple[List[Dict[str, object]], "kis_state.IncrementalScan"]:
+    """Checkpoint 模式（默认）：自上次运行以来新增/内容变化的文件。
+
+    返回 (文件条目列表, scan 对象)。调用方在成功产出后用 scan 提交 checkpoint。
+    """
+    scan = kis_state.scan_incremental(TASK_KEY, SCAN_PATHS, recursive=True)
+    files = [_build_file_entry(p) for p in scan.files if p.exists()]
+    files.sort(key=lambda x: x["mtime"], reverse=True)
+    return files, scan
 
 
 def normalize(value: str) -> str:
@@ -278,23 +312,57 @@ def generate_distill_report(files: List[Dict[str, object]], target_date: str | N
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="每日知识蒸馏")
-    parser.add_argument("days_pos", nargs="?", type=int, help="兼容旧用法：扫描天数")
-    parser.add_argument("--days", type=int, help="扫描最近 N 天")
+    parser.add_argument("days_pos", nargs="?", type=int, help="兼容旧用法：扫描天数（手动覆盖，不读写 checkpoint）")
+    parser.add_argument("--days", type=int, help="手动覆盖：扫描最近 N 天（不读写 checkpoint）")
+    parser.add_argument("--since", type=str, help="手动覆盖：扫描自指定日期起（YYYY-MM-DD，不读写 checkpoint）")
+    parser.add_argument("--reset-checkpoint", action="store_true", help="清除本任务 checkpoint 后退出（下次将全量视为增量）。")
     args = parser.parse_args()
-    days_back = args.days if args.days is not None else (args.days_pos if args.days_pos is not None else 7)
 
     print("=" * 50)
     print("🔬 知识蒸馏系统 - 每日蒸馏")
     print("=" * 50)
-    print(f"\n📂 扫描最近 {days_back} 天新增的内容...")
-    files = get_today_files(days_back)
+
+    if args.reset_checkpoint:
+        removed = kis_state.reset_task(TASK_KEY)
+        print(f"{'✅ 已清除' if removed else 'ℹ️ 无'} checkpoint（任务：{TASK_KEY}）")
+        return
+
+    # 三种模式：--days / --since 为手动覆盖（时间窗，不动 checkpoint）；
+    # 否则默认走 checkpoint 增量（自上次运行以来）。
+    manual_days = args.days if args.days is not None else args.days_pos
+    scan = None
+    if args.since:
+        try:
+            since_dt = datetime.strptime(args.since, "%Y-%m-%d")
+        except ValueError:
+            print(f"⚠️ --since 日期格式错误（需 YYYY-MM-DD）：{args.since}")
+            return
+        print(f"\n📂 [手动] 扫描 {args.since} 起新增内容（不更新 checkpoint）...")
+        files = get_files_since(since_dt)
+    elif manual_days is not None:
+        print(f"\n📂 [手动] 扫描最近 {manual_days} 天新增内容（不更新 checkpoint）...")
+        files = get_today_files(manual_days)
+    else:
+        files, scan = get_incremental_files()
+        if scan.last_run_at:
+            print(f"\n📂 [增量] 自上次运行（{scan.last_run_at}）以来新增/变化的内容...")
+        else:
+            print("\n📂 [增量] 首次运行，把当前输入层全部视为新增...")
+
     if not files:
-        print("⚠️ 没有找到最近的新内容")
+        print("✅ 没有需要蒸馏的新增内容")
+        # 即使无新增，也推进 checkpoint（确认本次扫描）。
+        if scan is not None:
+            kis_state.commit_scan(TASK_KEY, scan)
         return
     print(f"✅ 找到 {len(files)} 篇新笔记")
     print("\n📝 生成蒸馏报告...")
     output_file = generate_distill_report(files)
     print(f"✅ 报告已生成：{output_file}")
+
+    # 报告成功产出后才推进 checkpoint，避免失败丢增量。
+    if scan is not None:
+        kis_state.commit_scan(TASK_KEY, scan)
 
 
 if __name__ == "__main__":
