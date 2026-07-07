@@ -18,6 +18,9 @@ It runs an automated pipeline over the four kinds of content scattered across yo
 ## ✨ Features
 
 - 🤖 **Optional LLM fallback** — off by default. Declare any OpenAI-compatible provider yourself and it kicks in automatically (OpenAI / DeepSeek / Zhipu GLM / Tongyi / Volcengine Ark / self-hosted — anything works)
+- ⏩ **Incremental checkpoint** — daily distillation / weekly review process only files "added or changed since the last run" by default; mtime fast-filter + content-hash guard, so cloud-sync touching mtimes never triggers reprocessing
+- 🗂 **Auto input-layer classification catalog** — multi-label tags every input doc (reusing your taxonomy categories) and renders a "by-category / by-document" dual-view catalog; zero keyword hits fall back to 其他 (Other) and enter a pending queue
+- 🧭 **Taxonomy onboarding** — declare your own domain categories on first use (works with generic defaults if you don't)
 - 🌍 **Cross-platform automation** — one-command installers for macOS LaunchAgent / Linux cron / Windows Task Scheduler
 - 🔒 **Privacy-first** — every analysis runs locally; external APIs are only called when you explicitly configure one
 - 📊 **9-step full pipeline** — a single `run_all.py` runs the whole distillation flow
@@ -77,6 +80,55 @@ The 9-step pipeline runs in order:
 [9/9] quarterly_audit    Quarterly asset audit
 ```
 
+## ⏩ Incremental scan & input classification
+
+### Incremental checkpoint (default)
+
+`daily_distill` / `weekly_review` process only files **added or changed since the last run** by default. State lives in `<vault>/.kis_state.json` (daily and weekly use independent task keys).
+
+- Criteria: mtime fast-filter + content-hash tiebreak — cloud-sync refreshing mtimes will **not** re-ingest unchanged files.
+- Missed runs auto catch up; consecutive runs never overlap (checkpoint advances only after the report succeeds).
+
+```bash
+# Default: incremental since last run
+python3 scripts/daily_distill.py
+
+# Manual override (does NOT touch the checkpoint)
+python3 scripts/daily_distill.py --days 7            # last 7 days
+python3 scripts/daily_distill.py --since 2026-07-01  # since a given date
+
+# Clear this task's checkpoint (next run treats everything as new)
+python3 scripts/daily_distill.py --reset-checkpoint
+```
+
+> The ideas scan root is `第一层：输入层 (Inbox)/想法` and is walked **recursively, including all subfolders** (e.g. `想法/灵感集/`). daily / weekly / idea_tracker are all consistent.
+
+### Input-layer classification catalog
+
+During daily distillation, incremental docs are **multi-label classified** (a doc can belong to several categories, reusing your taxonomy keys) and a `输入层分类目录.md` (by-category / by-document dual view) is rendered in the distilled layer.
+
+```bash
+python3 scripts/daily_distill.py --classify keyword  # default, offline keywords
+python3 scripts/daily_distill.py --classify llm      # opt-in LLM semantic (auto-degrades offline/unconfigured)
+python3 scripts/daily_distill.py --classify off      # skip classification
+```
+
+- Zero keyword hits → 其他 (Other), queued into `.kis_pending_categories.json` for async human triage — the **script never blocks on input**.
+- The LLM backend can only **propose** new categories (into the queue); it never edits taxonomy directly.
+
+### Declare your own categories (onboarding)
+
+With no `taxonomy.json`, the system uses generic defaults; you can declare your own domain categories:
+
+```bash
+python3 scripts/kis_onboard.py --status     # show currently effective categories
+python3 scripts/kis_onboard.py --template   # get a fillable template
+# write filled JSON into taxonomy.json (deep-merged with defaults)
+python3 scripts/kis_onboard.py --write --file my_cats.json
+```
+
+Works fine without declaring; once declared it takes effect on the next classify / link / distill run.
+
 ## 📅 Scheduled automation (optional)
 
 ### macOS
@@ -114,14 +166,19 @@ Your Vault/
 ├── scripts/                          ← copied from this repo
 ├── .env                              ← your LLM config (already in .gitignore)
 ├── .knowledge-iteration-system.json  ← system config
+├── taxonomy.json                     ← (optional) your custom categories; generic defaults if absent
+├── catalog.json                      ← input classification source of truth (auto-generated, gitignored)
+├── .kis_state.json                   ← incremental checkpoint state (auto-generated, gitignored)
+├── .kis_pending_categories.json      ← pending classification queue (auto-generated, gitignored)
 ├── 📚 知识迭代系统说明.md            ← landing doc
 ├── 第一层：输入层 (Inbox)/
-│   ├── 想法/灵感集/
+│   ├── 想法/                          ← ideas root, scanned recursively incl. subfolders (e.g. 想法/灵感集/)
 │   └── Clippings/
 ├── 第二层：蒸馏层 (Distilled)/
 │   ├── 每日蒸馏/                    ← daily_distill.py
 │   ├── 每周复盘/                    ← weekly_review.py
 │   ├── 想法追踪/                    ← idea_tracker.py
+│   ├── 输入层分类目录.md            ← kis_catalog.py (classification dual view)
 │   ├── Clippings提炼/               ← clipping_refiner.py
 │   ├── 结构性链接建议/              ← link_suggester.py
 │   ├── 输出回流分析.md              ← feedback_loop.py
@@ -200,7 +257,7 @@ If your Vault lives inside iCloud Drive / OneDrive / Dropbox / Google Drive / Ba
 ## 🛠 FAQ
 
 **Q: Can I run it without configuring an LLM?**
-A: Yes. `skill_detector` falls back to pure regex; the other 8 scripts don't need an LLM at all.
+A: Yes. Everything is offline by default: `skill_detector` falls back to pure regex, input classification falls back to keywords, and the rest never needed an LLM. External APIs are only called when you explicitly opt in (`--llm=auto|api` or `--classify llm`).
 
 **Q: How long does a full run take?**
 A: Usually < 30 seconds without an LLM. With LLM enabled and 30+ candidates, expect ~10–15 minutes (bounded by API rate limits).

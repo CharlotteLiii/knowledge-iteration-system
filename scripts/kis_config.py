@@ -52,7 +52,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "output": "第四层：输出层 (Output)",
     },
     "subfolders": {
-        "ideas": "第一层：输入层 (Inbox)/想法/灵感集",
+        "ideas": "第一层：输入层 (Inbox)/想法",
         "clippings": "第一层：输入层 (Inbox)/Clippings",
         "dailyDistill": "第二层：蒸馏层 (Distilled)/每日蒸馏",
         "weeklyReview": "第二层：蒸馏层 (Distilled)/每周复盘",
@@ -92,7 +92,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "daily_distill": {
                 "label": "每日知识蒸馏",
                 "script": "daily_distill.py",
-                "args": ["--days", "2"],
+                "args": [],
                 "schedule": "daily",
                 "hour": 21,
                 "minute": 0,
@@ -345,6 +345,90 @@ def load_config() -> Dict[str, Any]:
 
 
 CONFIG = load_config()
+
+
+# ---------------------------------------------------------------------------
+# Taxonomy（知识分类 / 主题 / 桥接规则）可配置来源
+#
+# 默认值来自 scripts/taxonomy.default.json（与历史硬编码逐字节一致）。
+# 用户可在知识库根目录放 taxonomy.json 做深合并覆盖（缺省字段回落 default）。
+# link_suggester.py 与 clipping_refiner.py 都从这里读取，消除三套关键词表
+# 各自维护、互相漂移的老问题。
+# ---------------------------------------------------------------------------
+
+TAXONOMY_DEFAULT_PATH = SCRIPT_DIR / "taxonomy.default.json"
+TAXONOMY_USER_NAME = "taxonomy.json"
+TAXONOMY_USER_PATH = VAULT / TAXONOMY_USER_NAME
+
+
+def load_taxonomy() -> Dict[str, Any]:
+    """Load taxonomy defaults, then deep-merge an optional user override.
+
+    Default source: scripts/taxonomy.default.json (ships with the Skill).
+    User override: <vault>/taxonomy.json (optional). Missing keys fall back
+    to defaults via the same deep-merge used for the main config.
+    """
+    if not TAXONOMY_DEFAULT_PATH.exists():
+        raise SystemExit(f"分类配置缺失：{TAXONOMY_DEFAULT_PATH}")
+    try:
+        base = json.loads(TAXONOMY_DEFAULT_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"分类默认配置 JSON 解析失败：{TAXONOMY_DEFAULT_PATH}\n{exc}") from exc
+    if not isinstance(base, dict):
+        raise SystemExit(f"分类默认配置格式错误：{TAXONOMY_DEFAULT_PATH} 顶层必须是 JSON object")
+
+    if TAXONOMY_USER_PATH.exists():
+        try:
+            user = json.loads(TAXONOMY_USER_PATH.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"分类用户配置 JSON 解析失败：{TAXONOMY_USER_PATH}\n{exc}") from exc
+        if not isinstance(user, dict):
+            raise SystemExit(f"分类用户配置格式错误：{TAXONOMY_USER_PATH} 顶层必须是 JSON object")
+        # `_replace`: 列出的段做整段替换而非深合并（用于用户完全重定义分类/主题时不残留默认旧项）。
+        # 不写 `_replace` 时保持原深合并行为，向后兼容。
+        replace_sections = user.get("_replace") or []
+        if not isinstance(replace_sections, list):
+            raise SystemExit(f"分类用户配置错误：`_replace` 必须是字符串数组：{TAXONOMY_USER_PATH}")
+        user_clean = {k: v for k, v in user.items() if k != "_replace"}
+        merged = _merge_dict(base, user_clean)
+        for section in replace_sections:
+            if section in user_clean:
+                merged[section] = user_clean[section]
+        base = merged
+    return base
+
+
+TAXONOMY = load_taxonomy()
+
+
+def content_types() -> Dict[str, Dict[str, Any]]:
+    """{ctype: {keywords: [...], asset: str, priority: float}}"""
+    return TAXONOMY.get("contentTypes", {})
+
+
+def type_shortcuts() -> List[Dict[str, Any]]:
+    """Ordered hard-short-circuit rules for content-type detection."""
+    return TAXONOMY.get("typeShortcuts", [])
+
+
+def tag_rules() -> Dict[str, List[str]]:
+    """{tag: [keyword, ...]} for auto_tags."""
+    return TAXONOMY.get("tagRules", {})
+
+
+def themes() -> Dict[str, List[str]]:
+    """{theme: [keyword, ...]} for structural-link theme matching."""
+    return TAXONOMY.get("themes", {})
+
+
+def bridges() -> Dict[str, List[str]]:
+    """{content_type: [theme, ...]} bridge rules for clipping<->idea linking."""
+    return TAXONOMY.get("bridges", {})
+
+
+def domain_rules() -> List[Dict[str, Any]]:
+    """Ordered domain heuristics for clipping<->idea bridge scoring."""
+    return TAXONOMY.get("domainRules", [])
 
 
 def rel_path(section: str, key: str) -> str:

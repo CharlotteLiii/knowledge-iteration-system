@@ -11,6 +11,13 @@ __pycache__/
 # LLM 响应缓存（个人 Vault 私有）
 .kis-cache/
 
+# 运行状态 / 增量 checkpoint（个人 Vault 私有，勿分发）
+.kis_state.json
+
+# 用户分类覆盖与分类目录数据（个人 Vault 私有）
+catalog.json
+.kis_pending_categories.json
+
 # 脚本运行日志
 distill.log
 distill.error.log

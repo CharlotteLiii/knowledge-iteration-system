@@ -30,7 +30,7 @@
     "output": "第四层：输出层 (Output)"
   },
   "subfolders": {
-    "ideas": "第一层：输入层 (Inbox)/想法/灵感集",
+    "ideas": "第一层：输入层 (Inbox)/想法",
     "clippings": "第一层：输入层 (Inbox)/Clippings",
     "dailyDistill": "第二层：蒸馏层 (Distilled)/每日蒸馏",
     "weeklyReview": "第二层：蒸馏层 (Distilled)/每周复盘",
@@ -160,7 +160,7 @@ else:
 
 | Key | 角色 | 标准相对路径 |
 |---|---|---|
-| `ideas` | 想法/灵感输入 | `第一层：输入层 (Inbox)/想法/灵感集` |
+| `ideas` | 想法/灵感输入（递归扫描，含子目录） | `第一层：输入层 (Inbox)/想法` |
 | `clippings` | 外部抓取输入 | `第一层：输入层 (Inbox)/Clippings` |
 | `dailyDistill` | 每日蒸馏报告 | `第二层：蒸馏层 (Distilled)/每日蒸馏` |
 | `weeklyReview` | 每周复盘报告 | `第二层：蒸馏层 (Distilled)/每周复盘` |
@@ -212,3 +212,112 @@ python3 /path/to/scripts/run_all.py
 - 不在未确认时覆盖用户已有配置。
 - 不自动删除无效路径；先报告并让用户确认。
 - 不把用户私人绝对路径写进公开文档或共享示例。
+
+## Taxonomy 配置（知识分类 / 主题 / 桥接规则）
+
+内容类型判定、自动标签、结构性链接的主题匹配与桥接规则，统一由一份 **taxonomy 配置**驱动，不再散落在各脚本里硬编码。
+
+### 加载来源与优先级
+
+1. `scripts/taxonomy.default.json` —— 随 Skill 发行的默认值（与历史硬编码逐字节一致）。
+2. `<vault>/taxonomy.json` —— **可选**用户覆盖，存在时与默认值**深合并**（缺省字段回落默认，合并逻辑同主配置 `_merge_dict`）。
+
+两者都由 `kis_config.load_taxonomy()` 读取，暴露成模块级单例 `TAXONOMY`，并提供 getter：`content_types()` / `type_shortcuts()` / `tag_rules()` / `themes()` / `bridges()` / `domain_rules()`。`clipping_refiner.py` 与 `link_suggester.py` 都从这里取值。
+
+### 字段说明
+
+| 顶层键 | 类型 | 用途 | 消费者 |
+|---|---|---|---|
+| `contentTypes` | `{类型: {keywords:[], asset:str, priority:float}}` | Clipping 类型判定关键词、资产化建议、类型先验权重 | clipping_refiner |
+| `typeShortcuts` | `[{type, score, all:[], any:[]}]` | 强组合命中直接定类型的短路规则（`all` 全含 + `any` 任一） | clipping_refiner |
+| `tagRules` | `{标签: [关键词]}` | 自动标签命中规则 | clipping_refiner |
+| `themes` | `{主题: [关键词]}` | 结构性链接的主题匹配 | link_suggester |
+| `bridges` | `{内容类型: [主题]}` | Clipping 类型 → 想法主题的桥接加分 | link_suggester |
+| `domainRules` | `[{idea_contains?/idea_regex?, clip_regex, score, reason_*}]` | 领域启发式桥接（小红书 / 美业 / AI 工作流等） | link_suggester |
+| `classify` | `{minKeywordHits:int}` | 输入层分类的多标签最低命中阈值（默认 2） | kis_classifier |
+| `_replace` | `[段名]` | 列出的段做整段替换而非深合并 | load_taxonomy |
+
+### 自定义方法
+
+在知识库根目录放一个 `taxonomy.json`，只写想改的部分即可，例如替换掉个人主题、换成自己的领域：
+
+```json
+{
+  "themes": {
+    "我的主题A": ["关键词1", "关键词2"]
+  },
+  "contentTypes": {
+    "我的类型": { "keywords": ["xxx"], "asset": "xxx 卡片", "priority": 2.0 }
+  }
+}
+```
+
+> 默认行为：顶层键整体**深合并**；对 `themes`/`contentTypes` 这类字典是**按 key 合并**（你写的 key 覆盖/新增，未写的 key 保留默认）。
+
+#### `_replace`：整段替换（彻底重定义分类）
+
+当你想**完全探索自己的分类体系**、不想残留默认旧分类时，在顶层加一个 `_replace` 数组，列出要**整段替换**（而非深合并）的段名：
+
+```json
+{
+  "_replace": ["contentTypes", "typeShortcuts", "tagRules", "themes", "bridges"],
+  "contentTypes": { "...你的全套分类...": {} }
+}
+```
+
+- 列在 `_replace` 里的段：用你的内容**整个替掉**默认（默认旧分类不再叠加进来）。
+- 未列在 `_replace` 里的段：保持原来的**深合并**行为（向后兼容）。
+- 注意自洽性：若重定义了 `contentTypes`，建议同时重定义引用它们的 `typeShortcuts`/`bridges`，避免悬空引用。
+
+#### `classify.minKeywordHits`：多标签精准度
+
+控制输入层分类的**多标签最低命中阈值**：只有命中≥该数量关键词的分类才作为标签打上，弱命中不进多标签（避免“沾边即打”稀释目录）。若无任何分类达阈，取命中最强的单类作主分类兜底（不无谓落“其他”）。
+
+```json
+{ "classify": { "minKeywordHits": 3 } }
+```
+
+代码兑底默认为 `2`（保守）；实测建议 `3`（单标签占比高、几乎无 4+ 标签，目录清爽）。
+
+### 相似度后端（link_suggester）
+
+`link_suggester.py` 的关键词重合打分支持可插拔后端，通过 `--similarity` 选择：
+
+- `tfidf`（默认）：按语料 IDF 加权共享词，罕见专有词权重更高、泛词更低；量纲与旧版一致。纯本地，无 API、无 embedding、无隐私外发。
+- `legacy`：旧版裸交集计数（共享词数 × 2，上限 25），用于回归对拍或复现历史报告。
+
+```bash
+python scripts/link_suggester.py                       # 默认 tfidf
+python scripts/link_suggester.py --similarity legacy   # 复现旧版打分
+```
+
+两种后端都是本地计算；未来若接入 embedding 语义相似，将作为新增后端挂到同一 `--similarity` 开关，主流程不变。
+
+## 增量 checkpoint 与输入层分类（运行时数据）
+
+以下文件都是 **个人 Vault 私有的运行时数据**，已加入 `.gitignore`，不随 Skill 分发：
+
+| 文件 | 作用 | 产生者 |
+|---|---|---|
+| `<vault>/.kis_state.json` | 每个任务的增量 checkpoint（last_run + 已处理文件 mtime/hash） | kis_state.py |
+| `<vault>/catalog.json` | 输入层分类的**唯一数据源**（doc→分类/来源/hash） | kis_catalog.py |
+| `<vault>/.kis_pending_categories.json` | 待确认分类队列（落入其他 / LLM 提议新分类） | kis_catalog.py |
+| 蒸馏层 `输入层分类目录.md` | 从 catalog.json 渲染的双视图展示（勿手改） | kis_catalog.py |
+| `<vault>/taxonomy.json` | 用户声明的分类覆盖（可选，见上方 Taxonomy 章节） | kis_onboard.py / 手写 |
+
+### 增量语义
+
+- 默认：`daily_distill.py` / `weekly_review.py` 只处理自上次运行以来新增/内容变化的文件。
+- mtime 只做快筛，最终以内容 hash 定夺——对抗网盘同步刷新 mtime 的误判。
+- `--days N` / `--since YYYY-MM-DD`：手动时间窗，**不读写 checkpoint**。
+- `--reset-checkpoint`：清除本任务状态，下次全量视为增量。
+- 日报与周报使用**独立 task key**，互不干扰。
+- **想法扫描根**：`subfolders.ideas` 指向 `第一层：输入层 (Inbox)/想法` 根目录，**递归扫描所有子目录**（如 `想法/灵感集/`）。daily_distill / weekly_review / idea_tracker 三者均递归，口径一致。若把 `ideas` 配成某个子目录，其他兄弟子目录的想法会被漏扫。
+
+### 分类行为
+
+- `daily_distill.py --classify=keyword|llm|off`（默认 keyword）。
+- 分类维度复用 `taxonomy.contentTypes` 的 key，不新造表；多标签；零命中→「其他」。
+- **多标签精准度**：由 `taxonomy.classify.minKeywordHits` 控制（默认代码兑底 2，建议 3）。只有命中≥阈值的分类才打标签；若无分类达阈取最强单类作主分类兜底。
+- LLM 后端：opt-in、走 `kis_llm` 缓存、未配置/离线自动降级为关键词；**永远不自动写 taxonomy**，新分类需人工批准。
+- 分类失败不影响蒸馏主流程；疑难件进待审队列，由 agent 异步处理，脚本不阻塞。

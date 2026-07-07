@@ -233,7 +233,7 @@ def score_table(scores: Dict[str, int]) -> str:
 def generate_report() -> tuple[Path, int]:
     ideas: List[IdeaAnalysis] = []
     if IDEAS.exists():
-        for fpath in iter_markdown_files(IDEAS, recursive=False):
+        for fpath in iter_markdown_files(IDEAS, recursive=True):
             ideas.append(analyze_idea(fpath))
 
     ideas.sort(key=lambda x: x.total, reverse=True)

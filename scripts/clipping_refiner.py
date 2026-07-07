@@ -17,6 +17,9 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
 from kis_config import is_stopword, iter_markdown_files, subfolder_path
+from kis_config import content_types as _content_types
+from kis_config import tag_rules as _tag_rules
+from kis_config import type_shortcuts as _type_shortcuts
 
 CLIPPINGS = subfolder_path("clippings")
 OUTPUT = subfolder_path("clippingRefine")
@@ -48,71 +51,14 @@ TRANSITION_PATTERN = re.compile(r"但|然而|其实|反而|恰恰|事实上|只�
 # English insight hints (for allow-english quotes).
 ENGLISH_INSIGHT_PATTERN = re.compile(r"\b(actually|really|truly|instead of|not\s+\w+\s+but|only|never|always|the truth|most people|few people|the key|the point|essentially|fundamentally|matter|matters|dead|wins?|lose[sr]?|secret|nobody|everyone)\b", re.IGNORECASE)
 
-CONTENT_TYPES: Dict[str, Dict[str, object]] = {
-    "信息源清单": {
-        "keywords": ["信息源", "博主", "播客", "博客", "媒体", "newsletter", "推荐", "宝藏", "清单", "top", "关注", "订阅", "优质信息"],
-        "asset": "信息源库 / 订阅清单 / 主题情报入口",
-    },
-    "行业情报": {
-        "keywords": ["行业", "趋势", "图景", "渗透", "公司", "赛道", "独角兽", "市场", "未来", "机会", "空白点"],
-        "asset": "行业地图 / 趋势观察 / 机会清单",
-    },
-    "工作流教程": {
-        "keywords": ["工作流", "自动化", "联动", "搭建", "pipeline", "流程", "一键", "批量", "自动产出", "agent", "codex", "1 小时", "搞懂", "陌生行业"],
-        "asset": "工作流 / 自动化脚本 / Skill 候选",
-    },
-    "工具教程": {
-        "keywords": ["工具", "教程", "手把手", "使用指南", "安装", "配置", "codex", "claude", "obsidian", "harness", "oiioii", "github"],
-        "asset": "工具指南 / 操作手册 / Prompt 模板",
-    },
-    "Prompt/模板": {
-        "keywords": ["prompt", "提示词", "模板", "指令", "任务 1", "任务1", "任务 2", "任务2", "复制", "粘贴"],
-        "asset": "Prompt 模板库 / Skill 输入模板",
-    },
-    "案例拆解": {
-        "keywords": ["案例", "实测", "复盘", "拆解", "拉片", "怎么做", "全过程", "实践", "赚到", "收入", "结果"],
-        "asset": "案例卡片 / 方法验证 / 输出素材",
-    },
-    "观点文章": {
-        "keywords": ["观点", "本质", "为什么", "未来", "出路", "真相", "讲透", "认知", "判断", "思考"],
-        "asset": "观点卡片 / 论证素材 / 选题角度",
-    },
-    "职业机会": {
-        "keywords": ["remote", "远程", "求职", "面试", "公司", "岗位", "职业", "打工人", "简历", "学习路径"],
-        "asset": "机会清单 / 学习路径 / 行动计划",
-    },
-    "商业投研": {
-        "keywords": ["投资", "美股", "财经", "投研", "商业", "客户", "运营", "增长", "风险", "a 股", "日报"],
-        "asset": "商业案例 / 投研框架 / 风险清单",
-    },
-    "内容方法论": {
-        "keywords": ["小红书", "账号", "内容", "选题", "视频", "脚本", "博主", "阅读赚钱", "书籍合作", "变现", "栏目"],
-        "asset": "账号栏目 / 内容方法论 / 输出选题",
-    },
-    "创意素材": {
-        "keywords": ["短视频", "策划", "讲解视频", "编导", "vlog", "表达", "故事", "创意", "拍摄", "灵感"],
-        "asset": "内容企划 / 脚本模板 / 案例素材",
-    },
-    "心智成长": {
-        "keywords": ["冥想", "快乐", "淡定", "心智", "成长", "关系", "贵人", "帮助", "年轻人", "情绪"],
-        "asset": "想法追踪 / 个人方法论 / 反思问题",
-    },
-}
+# 内容类型、类型先验权重、类型判定短路规则均改为从 taxonomy 配置读取
+# （kis_config.content_types / type_shortcuts）。历史默认值见 scripts/taxonomy.default.json。
+def _content_types_map() -> Dict[str, Dict[str, object]]:
+    return _content_types()
 
-TYPE_PRIORITY = {
-    "信息源清单": 3.0,
-    "行业情报": 2.4,
-    "工作流教程": 3.0,
-    "Prompt/模板": 2.1,
-    "工具教程": 2.0,
-    "案例拆解": 1.8,
-    "职业机会": 1.7,
-    "商业投研": 1.6,
-    "内容方法论": 1.5,
-    "观点文章": 1.3,
-    "创意素材": 1.2,
-    "心智成长": 1.1,
-}
+
+def _type_priority() -> Dict[str, float]:
+    return {ctype: float(meta.get("priority", 1.0)) for ctype, meta in _content_types().items()}
 
 
 def get_content_hash(content: str) -> str:
@@ -172,19 +118,22 @@ def split_sentences(text: str) -> List[str]:
 
 def content_type(content: str, name: str) -> Tuple[str, int]:
     haystack = normalize(f"{name} {content}")
+    ctype_map = _content_types_map()
+    priority = _type_priority()
     scored = []
-    for ctype, meta in CONTENT_TYPES.items():
+    for ctype, meta in ctype_map.items():
         matched = [kw for kw in meta["keywords"] if normalize(str(kw)) in haystack]  # type: ignore[index]
         if not matched:
             continue
         # Weighted score: match count + priority, with a small title boost.
         title_hits = sum(1 for kw in matched if normalize(str(kw)) in normalize(name))
-        score = len(matched) * 2 + title_hits * 2 + TYPE_PRIORITY.get(ctype, 1.0)
+        score = len(matched) * 2 + title_hits * 2 + priority.get(ctype, 1.0)
         scored.append((score, len(matched), ctype))
-    if "codex" in haystack and ("陌生行业" in haystack or "1 小时" in haystack or "提示词" in haystack or "prompt" in haystack):
-        return "工作流教程", 16
-    if "信息源" in haystack and ("博主" in haystack or "推荐" in haystack or "宝藏" in haystack):
-        return "信息源清单", 16
+    for rule in _type_shortcuts():
+        all_kw = [normalize(str(k)) for k in rule.get("all", [])]
+        any_kw = [normalize(str(k)) for k in rule.get("any", [])]
+        if all(k in haystack for k in all_kw) and (not any_kw or any(k in haystack for k in any_kw)):
+            return str(rule["type"]), int(rule.get("score", 16))
     if not scored:
         return "待判断", 0
     score, matched_count, ctype = sorted(scored, reverse=True)[0]
@@ -194,19 +143,7 @@ def content_type(content: str, name: str) -> Tuple[str, int]:
 def auto_tags(content: str, name: str, limit: int = 4) -> List[str]:
     haystack = normalize(f"{name} {content}")
     candidates = []
-    tag_rules = {
-        "AI/LLM": ["ai", "gpt", "llm", "大模型", "agent", "codex", "claude"],
-        "Prompt/工作流": ["prompt", "提示词", "工作流", "自动化", "流程", "模板"],
-        "工具教程": ["教程", "手把手", "使用指南", "安装", "配置", "工具"],
-        "信息源": ["信息源", "博主", "播客", "博客", "媒体", "推荐", "订阅", "宝藏"],
-        "行业情报": ["行业", "趋势", "赛道", "公司", "机会", "市场", "渗透"],
-        "案例拆解": ["案例", "拆解", "复盘", "实测", "实践", "赚到"],
-        "知识管理": ["obsidian", "知识库", "笔记", "知识管理"],
-        "内容创作": ["小红书", "视频", "内容", "选题", "脚本", "博主", "栏目"],
-        "职业机会": ["remote", "远程", "求职", "面试", "岗位", "职业"],
-        "商业投研": ["赚钱", "变现", "收入", "商业", "投资", "客户", "运营", "财经", "美股"],
-        "个人成长": ["冥想", "心智", "成长", "关系", "快乐", "淡定"],
-    }
+    tag_rules = _tag_rules()
     for tag, kws in tag_rules.items():
         score = sum(1 for kw in kws if kw in haystack)
         if score:
@@ -633,7 +570,7 @@ def calculate_quality_score(content: str, name: str) -> int:
 
 
 def asset_suggestion(ctype: str, score: int, methods: List[str]) -> str:
-    asset = CONTENT_TYPES.get(ctype, {}).get("asset", "想法追踪 / 暂存观察")
+    asset = _content_types_map().get(ctype, {}).get("asset", "想法追踪 / 暂存观察")
     if score >= 70 and methods:
         return f"优先沉淀为：{asset}"
     if score >= 50:
