@@ -209,7 +209,7 @@ def first_paragraph(content: str, limit: int = 600) -> str:
 
 def load_ideas() -> List[Asset]:
     assets: List[Asset] = []
-    for path in iter_markdown_files(IDEAS, recursive=False):
+    for path in iter_markdown_files(IDEAS, recursive=True):
         content = safe_read(path)
         assets.append(Asset(
             name=path.stem,
