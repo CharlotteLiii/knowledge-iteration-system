@@ -123,6 +123,7 @@ See `references/config-schema.md` and `templates/setup-preflight-report.md`.
 每日蒸馏时对增量文档做 **多标签分类**（一篇可属多个分类），分类维度复用 taxonomy 的 `contentTypes` key。
 - 数据源：`<vault>/catalog.json`（唯一真相）；渲染产物：蒸馏层 `输入层分类目录.md`（按分类看 / 按文档看 双视图，勿手改）。
 - 后端：`--classify=keyword`（默认、离线）/ `llm`（opt-in、降级安全）/ `off`。零命中 → 归入「其他」。
+- 精准度：多标签需命中≥ `taxonomy.classify.minKeywordHits`（默认兑底 2，推荐 3）个关键词才打上；弱命中取最强单类作主分类兜底。
 - 疑难件（落入「其他」或 LLM 提议新分类）进待审队列 `<vault>/.kis_pending_categories.json`，由 agent 异步问用户处理，**脚本不阻塞**。
 
 ### Taxonomy onboarding
@@ -152,7 +153,7 @@ python scripts/setup_preflight.py --create-missing
 - `scripts/daily_distill.py` — daily distillation; checkpoint incremental by default (`--days/--since` manual override, `--reset-checkpoint` to clear); runs input-layer classification (`--classify=keyword|llm|off`).
 - `scripts/weekly_review.py` — weekly review; checkpoint incremental by default (independent task key from daily).
 - `scripts/kis_state.py` — per-task run state / incremental checkpoint (`<vault>/.kis_state.json`); mtime fast-filter + content-hash tiebreak; used by daily/weekly.
-- `scripts/kis_classifier.py` — pluggable multi-label input classifier reusing taxonomy `contentTypes` keys; KeywordClassifier (default, offline) + LLMClassifier (opt-in, cached, auto-degrades); zero-hit falls back to 其他.
+- `scripts/kis_classifier.py` — pluggable multi-label input classifier reusing taxonomy `contentTypes` keys; KeywordClassifier (default, offline, `minKeywordHits` threshold) + LLMClassifier (opt-in, cached, auto-degrades); zero-hit falls back to 其他.
 - `scripts/kis_catalog.py` — `catalog.json` source of truth + renders `输入层分类目录.md` (by-category / by-document views) + pending queue for async human triage.
 - `scripts/kis_onboard.py` — non-blocking taxonomy onboarding (`--status/--template/--validate/--write`); agent runs the guided Q&A, script only validates + writes `taxonomy.json`.
 - `scripts/idea_tracker.py` — idea maturity tracking; scans the entire `ideas` root recursively (incl. subfolders).

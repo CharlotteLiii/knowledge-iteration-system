@@ -18,9 +18,20 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from kis_config import content_types
+from kis_config import content_types, TAXONOMY
 
 OTHER = "其他"
+
+# 多标签最低命中阈值：只有命中 >= min_hits 的分类才作为标签打上，
+# 弱命中不进多标签，避免"沾边即打"稀释目录。可在 taxonomy.json 用
+# `classify.minKeywordHits` 覆盖（默认 2）。
+def _min_hits() -> int:
+    cfg = TAXONOMY.get("classify") if isinstance(TAXONOMY, dict) else None
+    if isinstance(cfg, dict):
+        val = cfg.get("minKeywordHits")
+        if isinstance(val, int) and val >= 1:
+            return val
+    return 2
 
 
 def _normalize(text: str) -> str:
@@ -36,12 +47,18 @@ class Classification:
 
 
 class KeywordClassifier:
-    """离线多标签分类：命中 taxonomy.contentTypes 关键词即打该标签。"""
+    """离线多标签分类：命中 taxonomy.contentTypes 关键词即打该标签。
+
+    精准模式（默认 min_hits=2）：只有命中 >= min_hits 个关键词的分类才作为标签。
+    若没有任何分类达到阈值，则退而取命中最强的**单个**分类作主分类兜底，
+    避免把弱命中文档无谓归入 OTHER；真正零命中才落 OTHER。
+    """
 
     name = "keyword"
 
-    def __init__(self) -> None:
+    def __init__(self, min_hits: Optional[int] = None) -> None:
         self._types = content_types()
+        self._min_hits = min_hits if (isinstance(min_hits, int) and min_hits >= 1) else _min_hits()
 
     def classify(self, name: str, content: str) -> Classification:
         haystack = _normalize(f"{name} {content}")
@@ -54,7 +71,12 @@ class KeywordClassifier:
         if not matched:
             return Classification(categories=[OTHER], source="keyword", fell_back_to_other=True)
         matched.sort(key=lambda x: (-x[0], x[1]))
-        return Classification(categories=[c for _, c in matched], source="keyword")
+        # 精准多标签：只保留达到阈值的分类。
+        strong = [c for h, c in matched if h >= self._min_hits]
+        if strong:
+            return Classification(categories=strong, source="keyword")
+        # 无强命中 → 取最强单类作主分类兜底（不落 OTHER）。
+        return Classification(categories=[matched[0][1]], source="keyword")
 
 
 class LLMClassifier:

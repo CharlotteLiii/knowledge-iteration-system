@@ -234,6 +234,8 @@ python3 /path/to/scripts/run_all.py
 | `themes` | `{主题: [关键词]}` | 结构性链接的主题匹配 | link_suggester |
 | `bridges` | `{内容类型: [主题]}` | Clipping 类型 → 想法主题的桥接加分 | link_suggester |
 | `domainRules` | `[{idea_contains?/idea_regex?, clip_regex, score, reason_*}]` | 领域启发式桥接（小红书 / 美业 / AI 工作流等） | link_suggester |
+| `classify` | `{minKeywordHits:int}` | 输入层分类的多标签最低命中阈值（默认 2） | kis_classifier |
+| `_replace` | `[段名]` | 列出的段做整段替换而非深合并 | load_taxonomy |
 
 ### 自定义方法
 
@@ -250,7 +252,32 @@ python3 /path/to/scripts/run_all.py
 }
 ```
 
-> 注意：顶层键会整体深合并；对 `themes`/`contentTypes` 这类字典是**按 key 合并**（你写的 key 覆盖/新增，未写的 key 保留默认）。若要彻底移除某个默认主题，需要显式在 `taxonomy.json` 里重定义整张表。
+> 默认行为：顶层键整体**深合并**；对 `themes`/`contentTypes` 这类字典是**按 key 合并**（你写的 key 覆盖/新增，未写的 key 保留默认）。
+
+#### `_replace`：整段替换（彻底重定义分类）
+
+当你想**完全探索自己的分类体系**、不想残留默认旧分类时，在顶层加一个 `_replace` 数组，列出要**整段替换**（而非深合并）的段名：
+
+```json
+{
+  "_replace": ["contentTypes", "typeShortcuts", "tagRules", "themes", "bridges"],
+  "contentTypes": { "...你的全套分类...": {} }
+}
+```
+
+- 列在 `_replace` 里的段：用你的内容**整个替掉**默认（默认旧分类不再叠加进来）。
+- 未列在 `_replace` 里的段：保持原来的**深合并**行为（向后兼容）。
+- 注意自洽性：若重定义了 `contentTypes`，建议同时重定义引用它们的 `typeShortcuts`/`bridges`，避免悬空引用。
+
+#### `classify.minKeywordHits`：多标签精准度
+
+控制输入层分类的**多标签最低命中阈值**：只有命中≥该数量关键词的分类才作为标签打上，弱命中不进多标签（避免“沾边即打”稀释目录）。若无任何分类达阈，取命中最强的单类作主分类兜底（不无谓落“其他”）。
+
+```json
+{ "classify": { "minKeywordHits": 3 } }
+```
+
+代码兑底默认为 `2`（保守）；实测建议 `3`（单标签占比高、几乎无 4+ 标签，目录清爽）。
 
 ### 相似度后端（link_suggester）
 
@@ -291,5 +318,6 @@ python scripts/link_suggester.py --similarity legacy   # 复现旧版打分
 
 - `daily_distill.py --classify=keyword|llm|off`（默认 keyword）。
 - 分类维度复用 `taxonomy.contentTypes` 的 key，不新造表；多标签；零命中→「其他」。
+- **多标签精准度**：由 `taxonomy.classify.minKeywordHits` 控制（默认代码兑底 2，建议 3）。只有命中≥阈值的分类才打标签；若无分类达阈取最强单类作主分类兜底。
 - LLM 后端：opt-in、走 `kis_llm` 缓存、未配置/离线自动降级为关键词；**永远不自动写 taxonomy**，新分类需人工批准。
 - 分类失败不影响蒸馏主流程；疑难件进待审队列，由 agent 异步处理，脚本不阻塞。

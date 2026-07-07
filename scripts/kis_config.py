@@ -384,7 +384,17 @@ def load_taxonomy() -> Dict[str, Any]:
             raise SystemExit(f"分类用户配置 JSON 解析失败：{TAXONOMY_USER_PATH}\n{exc}") from exc
         if not isinstance(user, dict):
             raise SystemExit(f"分类用户配置格式错误：{TAXONOMY_USER_PATH} 顶层必须是 JSON object")
-        base = _merge_dict(base, user)
+        # `_replace`: 列出的段做整段替换而非深合并（用于用户完全重定义分类/主题时不残留默认旧项）。
+        # 不写 `_replace` 时保持原深合并行为，向后兼容。
+        replace_sections = user.get("_replace") or []
+        if not isinstance(replace_sections, list):
+            raise SystemExit(f"分类用户配置错误：`_replace` 必须是字符串数组：{TAXONOMY_USER_PATH}")
+        user_clean = {k: v for k, v in user.items() if k != "_replace"}
+        merged = _merge_dict(base, user_clean)
+        for section in replace_sections:
+            if section in user_clean:
+                merged[section] = user_clean[section]
+        base = merged
     return base
 
 
